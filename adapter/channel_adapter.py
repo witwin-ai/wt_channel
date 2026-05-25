@@ -5,26 +5,22 @@ and is registered on the core ``PlatformSceneHandler`` by the plugin's ``__init_
 
 It reuses the frozen base maps for the shared parts — geometry (``GeometryMap``),
 transform (``TransformMap``), scalar material (``MaterialMap``), structure metadata
-(``StructureMap``) — and adds the channel-specific parts: the scene config singleton
-(``SettingsMap``) and (later phases) ITU material presets, endpoints, antenna arrays,
-solvers, and 2D radiomap visualization.
+(``StructureMap``) — and adds the channel-specific parts: structures + ITU material
+presets, endpoints (``Tx`` / ``Rx`` with inline antennas), and the ``RadioMap`` object
+that doubles as the receiver grid. The scene config (frequency / device / noise) is not
+a separate object: it rides the ``RadioMap`` and ``PathSolver`` components, and is
+discovered from them on export.
 """
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 from witwin_server import Scene, SceneObject
 from witwin_server.platform_bridge import GeometryMap, StructureMap, TransformMap
 
-from .array_spec import ArraySpecMap
-from .common import num, vec
-from .endpoint_map import (
-    DEFAULT_ARRAY_COMPONENT,
-    GRID_COMPONENT,
-    RX_COMPONENT,
-    TX_COMPONENT,
-    EndpointMap,
-)
+from .common import device_name, num, vec
+from .endpoint_map import RADIOMAP_COMPONENT, RX_COMPONENT, TX_COMPONENT, EndpointMap
 from .material_map import ChannelMaterialMap
-from .settings_map import MARKER_COMPONENT, SettingsMap
+
+PATHSOLVER_COMPONENT = "PathSolver"
 
 
 class ChannelAdapter:
@@ -44,72 +40,94 @@ class ChannelAdapter:
         """Translate a ``channel.Scene`` into a studio ``Scene`` (batched)."""
         studio = Scene(kind="local")
         studio.begin_batch()
-        studio.add_object(SettingsMap.to_studio(scene))
+        frequency = scene.frequency
+        device = device_name(scene.device)
+        noise = getattr(scene, "noise_power", None)
+
         for structure in scene.structures:
             obj = StructureMap.to_studio(structure)
             ChannelMaterialMap.overlay_studio(obj, structure.material)
             studio.add_object(obj)
         for tx in scene.transmitters:
-            studio.add_object(EndpointMap.tx_to_studio(tx))
-        for rx in scene.receivers:
-            # ReceiverGrid carries an `axis`; a point Receiver does not.
-            builder = EndpointMap.grid_to_studio if hasattr(rx, "axis") else EndpointMap.rx_to_studio
-            studio.add_object(builder(rx))
-        if scene.tx_array is not None:
-            studio.add_object(EndpointMap.default_array_to_studio("tx", scene.tx_array))
-        if scene.rx_array is not None:
-            studio.add_object(EndpointMap.default_array_to_studio("rx", scene.rx_array))
+            studio.add_object(EndpointMap.tx_to_studio(tx, scene.tx_array))
+
+        grids = [r for r in scene.receivers if hasattr(r, "axis")]
+        points = [r for r in scene.receivers if not hasattr(r, "axis")]
+        for grid in grids:
+            studio.add_object(EndpointMap.radiomap_to_studio(
+                grid, frequency=frequency, device=device, noise_power=noise))
+        for rx in points:
+            studio.add_object(EndpointMap.rx_to_studio(rx, scene.rx_array))
+        # A PathSolver carries the config when there is no RadioMap, and is the path-solve
+        # entry point whenever there are point receivers.
+        if points or not grids:
+            studio.add_object(self._pathsolver_object(
+                frequency=frequency, device=device, noise_power=noise))
         studio.end_batch()
         return studio
 
     # --- studio -> platform --------------------------------------------------
 
     def to_platform(self, studio_scene: Scene) -> Any:
-        """Rebuild a ``channel.Scene`` from the studio scene's objects."""
-        import witwin.channel as ch
+        """Rebuild a ``channel.Scene`` from the studio scene (config discovered)."""
+        frequency, device, noise = self._discover_config(studio_scene)
+        return self.build(studio_scene, frequency=frequency, device=device, noise_power=noise)
 
-        settings_obj = self._find_settings(studio_scene)
-        if settings_obj is None:
-            raise ValueError(
-                "channel export requires a 'Channel Settings' object with a "
-                "ChannelSettings component (scene frequency / device).")
-        config = SettingsMap.build_config(settings_obj)
+    def build(self, studio_scene: Scene, *, frequency: Optional[float], device: str,
+              noise_power: Optional[float] = None) -> Any:
+        """Rebuild a ``channel.Scene`` with explicit scene config (used by the solvers)."""
+        import witwin.channel as ch
 
         structures: List[Any] = []
         transmitters: List[Any] = []
         receivers: List[Any] = []
-        tx_array = rx_array = None
         for obj in studio_scene.objects.values():
-            if obj is settings_obj:
-                continue
             if obj.get_component(TX_COMPONENT) is not None:
                 transmitters.append(EndpointMap.tx_to_platform(ch, obj))
-            elif obj.get_component(RX_COMPONENT) is not None or obj.get_component(GRID_COMPONENT) is not None:
-                receivers.append(EndpointMap.receiver_to_platform(ch, obj))
-            elif obj.get_component(DEFAULT_ARRAY_COMPONENT) is not None:
-                if str(obj.get_component(DEFAULT_ARRAY_COMPONENT).role) == "tx":
-                    tx_array = ArraySpecMap.from_object(ch, obj)
-                else:
-                    rx_array = ArraySpecMap.from_object(ch, obj)
+            elif obj.get_component(RX_COMPONENT) is not None:
+                receivers.append(EndpointMap.rx_to_platform(ch, obj))
+            elif obj.get_component(RADIOMAP_COMPONENT) is not None:
+                receivers.append(EndpointMap.radiomap_to_platform(ch, obj))
             elif obj.get_component("PlatformGeometry") is not None:
-                structures.append(self._structure_to_platform(ch, obj, config.frequency))
+                structures.append(self._structure_to_platform(ch, obj, frequency))
 
         scene = ch.Scene(structures=structures, transmitters=transmitters, receivers=receivers,
-                         frequency=config.frequency, device=config.device,
-                         tx_array=tx_array, rx_array=rx_array)
-        if config.noise_power is not None:
-            scene.noise_power = config.noise_power
+                         frequency=frequency, device=device)
+        if noise_power is not None:
+            scene.noise_power = noise_power
         return scene
 
     # --- helpers -------------------------------------------------------------
 
+    @classmethod
+    def _discover_config(cls, studio_scene: Scene) -> Tuple[Optional[float], str, Optional[float]]:
+        # Frequency / device / noise live on the RadioMap (preferred) or the PathSolver.
+        for component_name in (RADIOMAP_COMPONENT, PATHSOLVER_COMPONENT):
+            for obj in studio_scene.objects.values():
+                comp = obj.get_component(component_name)
+                if comp is not None:
+                    return cls._config_from(comp)
+        return (None, "cuda", None)
+
     @staticmethod
-    def _find_settings(studio_scene: Scene) -> Optional[SceneObject]:
-        # The Channel Settings object is the one carrying a ChannelSettings component.
-        for obj in studio_scene.objects.values():
-            if obj.get_component(MARKER_COMPONENT) is not None:
-                return obj
-        return None
+    def _config_from(comp: Any) -> Tuple[Optional[float], str, Optional[float]]:
+        frequency = num(comp.frequency)
+        noise = num(comp.noise_power) if bool(comp.use_noise_power) else None
+        return (frequency if frequency > 0.0 else None, str(comp.device), noise)
+
+    @staticmethod
+    def _pathsolver_object(*, frequency: Optional[float], device: str,
+                           noise_power: Optional[float]) -> SceneObject:
+        from ..components.pathsolver import PathSolverComponent
+
+        obj = SceneObject(name="Path Solver", mesh_type="Empty")
+        comp = obj.add_component(PathSolverComponent())
+        comp.frequency = 0.0 if frequency is None else float(frequency)
+        comp.device = device
+        if noise_power is not None:
+            comp.use_noise_power = True
+            comp.noise_power = float(noise_power)
+        return obj
 
     @classmethod
     def _structure_to_platform(cls, ch: Any, obj: SceneObject, scene_frequency: Optional[float]) -> Any:

@@ -1,10 +1,11 @@
-"""PathSolve — point-to-point path solve (CIR/CFR/taps) + viewport ray drawing.
+"""PathSolver — point-to-point path solve (CIR/CFR/taps) + viewport ray drawing.
 
-Lives on the ``Channel Settings`` object. Solves discrete Tx<->Rx propagation paths
-(``path.solve``), keeps the ``PathResult`` server-side, plots the CIR / CFR / taps in
-its figure, and (when ``draw_paths``) draws each ray as a declarative poly-line render
-spec in the viewport, colored by interaction type (LoS / reflection / diffraction).
-``bandwidth`` feeds the discrete-tap synthesis only. Live solve needs CUDA RayD/OptiX.
+A standalone solver object: it carries the scene config (frequency / device) and the
+path config, auto-finds the transmitter and point receiver in the scene (or uses the
+named ones), solves the discrete Tx<->Rx propagation paths (``path.solve``), keeps the
+``PathResult`` server-side, plots the CIR / CFR / taps, and (when ``draw_paths``) draws
+each ray as a declarative poly-line render spec colored by interaction type
+(LoS / reflection / diffraction). Live solve needs CUDA RayD/OptiX.
 """
 from witwin_server import Notifications, SceneObject, api
 from witwin_server.components import (
@@ -20,19 +21,33 @@ from witwin_server.components import (
 from witwin_server.components import RenderSpec, lines_geometry, pbr_material
 
 from ..adapter.path_solve import PathLineBuilder, PathPlots, PathSolveRunner
-from .settings import CATEGORY
+from .category import CATEGORY
+
+_SCENE = "Scene"
+_TAPS = {"field_name": "plot_mode", "operator": "eq", "value": "taps"}
+TX_COMPONENT = "ChannelTx"
+RX_COMPONENT = "ChannelRx"
 
 
-@component(name="PathSolve", category=CATEGORY)
-class PathSolveComponent(Component):
+@component(name="PathSolver", display_name="PathSolver", category=CATEGORY)
+class PathSolverComponent(Component):
     """Discrete Tx<->Rx path solve + CIR/CFR/taps plots + viewport ray poly-lines."""
 
     _result = None        # runtime PathResult (never serialized)
     _path_ids = None      # ids of the viewport ray-path objects this component owns
 
-    # --- endpoints ---
-    transmitter = string_field("tx", title="Path Solve", description="Transmitter name.")
-    receiver = string_field("rx", description="Point Receiver name (not a grid).")
+    # --- scene config ---
+    frequency = float_field(3.5e9, min=0.0, group=_SCENE,
+                            description="Scene carrier frequency in Hz (re-evaluates ITU materials).")
+    device = string_field("cuda", options=["cuda", "cpu"], enum_toggle=True, group=_SCENE,
+                          description="Solve device. Live solve needs CUDA RayD.")
+    use_noise_power = bool_field(False, group=_SCENE, title="Noise")
+    noise_power = float_field(1e-13, min=0.0, group=_SCENE, show_if="use_noise_power",
+                             description="Linear noise power (carried with the scene config).")
+
+    # --- endpoints (blank = auto-find in the scene) ---
+    transmitter = string_field("", title="Solve", description="Transmitter name (blank = first Tx).")
+    receiver = string_field("", description="Point Receiver name (blank = first Rx; not a RadioMap).")
 
     # --- path config ---
     num_samples = int_field(10000, min=1, description="Probe ray count.")
@@ -44,31 +59,25 @@ class PathSolveComponent(Component):
 
     # --- visualization ---
     draw_paths = bool_field(True, description="Draw ray poly-lines in the viewport.")
-    plot_mode = string_field("cir", options=["cir", "cfr", "taps"], enum_toggle=True,
-                             title="Plot")
-    bandwidth = float_field(100e6, min=1.0, show_if={"field_name": "plot_mode", "operator": "eq",
-                                                     "value": "taps"},
-                            description="Tap synthesis bandwidth (Hz).")
-    num_taps = int_field(64, min=1, show_if={"field_name": "plot_mode", "operator": "eq",
-                                             "value": "taps"})
+    plot_mode = string_field("cir", options=["cir", "cfr", "taps"], enum_toggle=True, title="Plot")
+    bandwidth = float_field(100e6, min=1.0, show_if=_TAPS, description="Tap synthesis bandwidth (Hz).")
+    num_taps = int_field(64, min=1, show_if=_TAPS)
     path_figure = figure(title="Channel Response")
 
     @button(display_name="Solve Paths")
     def solve(self):
         scene = self._owner.scene
-        tx_obj = scene.get_object_by_name(str(self.transmitter))
-        if tx_obj is None or tx_obj.get_component("ChannelTransmitter") is None:
-            Notifications.error("Channel", f"Transmitter '{self.transmitter}' not found")
+        transmitter = self._resolve(scene, self.transmitter, TX_COMPONENT)
+        if transmitter is None:
+            Notifications.error("Channel", "No transmitter found (add a Tx, or set its name).")
             return "Transmitter not found"
-        rx_obj = scene.get_object_by_name(str(self.receiver))
-        if rx_obj is None or rx_obj.get_component("ChannelReceiver") is None:
-            Notifications.error(
-                "Channel",
-                f"Point Receiver '{self.receiver}' not found "
-                "(path solve needs a Receiver, not a ReceiverGrid)")
+        receiver = self._resolve(scene, self.receiver, RX_COMPONENT)
+        if receiver is None:
+            Notifications.error("Channel", "No point Receiver found (add an Rx, or set its name).")
             return "Receiver not found"
         try:
-            self._result = PathSolveRunner.run(scene, self)
+            self._result = PathSolveRunner.run(scene, self, transmitter=transmitter,
+                                               receiver=receiver)
         except Exception as exc:  # noqa: BLE001 - GPU solver boundary: notify, don't crash the button
             Notifications.error("Channel", f"path solve failed: {exc}")
             return f"Path solve failed: {exc}"
@@ -118,3 +127,17 @@ class PathSolveComponent(Component):
             if scene.get_object(object_id) is not None:
                 scene.remove_object(object_id)
         self._path_ids = []
+
+    @staticmethod
+    def _resolve(scene, field_value, component_name):
+        # Use the named endpoint if set + valid; else the first matching object in the scene.
+        name = str(field_value).strip()
+        if name:
+            obj = scene.get_object_by_name(name)
+            if obj is not None and obj.get_component(component_name) is not None:
+                return name
+            return None
+        for obj in scene.objects.values():
+            if obj.get_component(component_name) is not None:
+                return obj.name
+        return None

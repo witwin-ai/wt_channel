@@ -62,6 +62,7 @@ def test_itu_band_validation_on_export(adapter):
     # very_dry_ground is only defined over 1-10 GHz; exporting at 50 GHz must raise.
     scene = _scene(Structure(Box(size=(8, 8, 0.2)), Material.from_itu("very_dry_ground"), name="g"))
     studio = adapter.to_studio(scene)
-    studio.get_object_by_name("Channel Settings").get_component("ChannelSettings").frequency = 50e9
+    # A structures-only scene carries its config on the auto-added Path Solver object.
+    studio.get_object_by_name("Path Solver").get_component("PathSolver").frequency = 50e9
     with pytest.raises(ValueError, match="very_dry_ground"):
         adapter.to_platform(studio)

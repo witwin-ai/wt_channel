@@ -122,18 +122,27 @@ class SolveRunner:
     """Rebuild the platform scene from the studio scene and run a radiomap solve."""
 
     @staticmethod
-    def run(studio_scene: Any, comp: Any) -> Any:
-        """Run the chosen solver family; returns a ``RadioMapResult``."""
+    def run(studio_scene: Any, comp: Any, *, transmitter: str, receiver: str) -> Any:
+        """Run the chosen solver family for the given Tx/grid; returns a ``RadioMapResult``."""
         import witwin.channel as ch
 
-        platform = ChannelAdapter().to_platform(studio_scene)
-        tx = str(comp.transmitter)
-        grid = str(comp.receiver_grid)
+        platform = SolveRunner._build_scene(studio_scene, comp)
         if str(comp.solver) == "montecarlo":
             config = ConfigBuilder.montecarlo(ch, comp)
-            return ch.montecarlo.solve(scene=platform, transmitter=tx, receiver=grid, config=config)
+            return ch.montecarlo.solve(scene=platform, transmitter=transmitter,
+                                       receiver=receiver, config=config)
         config = ConfigBuilder.deterministic(ch, comp)
-        return ch.deterministic.solve(scene=platform, transmitter=tx, receiver=grid, config=config)
+        return ch.deterministic.solve(scene=platform, transmitter=transmitter,
+                                      receiver=receiver, config=config)
+
+    @staticmethod
+    def _build_scene(studio_scene: Any, comp: Any) -> Any:
+        # Rebuild the platform scene using the component's own scene config.
+        frequency = num(comp.frequency)
+        noise = num(comp.noise_power) if bool(comp.use_noise_power) else None
+        return ChannelAdapter().build(
+            studio_scene, frequency=frequency if frequency > 0.0 else None,
+            device=str(comp.device), noise_power=noise)
 
 
 class RadioMapExtractor:

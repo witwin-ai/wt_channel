@@ -18,8 +18,8 @@ from _helpers import RT
 # --- config builders (CPU) -----------------------------------------------------
 
 def _result_component():
-    from wt_channel.components.result import ChannelResultComponent
-    return ChannelResultComponent()
+    from wt_channel.components.radiomap import RadioMapComponent
+    return RadioMapComponent()
 
 
 def test_deterministic_config_maps_fields():
@@ -160,8 +160,8 @@ def test_library_items_registered(wtc):
     from witwin_server.handlers.library import _pending_items
 
     names = set(_pending_items)
-    assert {"channel_demo", "channel_settings", "channel_tx", "channel_grid",
-            "channel_ula", "channel_upa"} <= names
+    assert {"channel_demo", "channel_tx", "channel_rx", "channel_radiomap",
+            "channel_pathsolver"} <= names
 
 
 def test_demo_prefab_roundtrips(adapter, wtc):
@@ -170,24 +170,24 @@ def test_demo_prefab_roundtrips(adapter, wtc):
 
     studio = StudioScene(kind="local")
     studio.begin_batch()
-    ctx = SimpleNamespace(scene=studio, name="Channel Settings")
-    studio.add_object(library_items._make_demo(ctx))
+    ctx = SimpleNamespace(scene=studio, name="RadioMap")
+    studio.add_object(library_items._make_demo(ctx))  # returns the RadioMap (primary)
     studio.end_batch()
-    # The demo settings default to CUDA; force CPU so the round trip needs no GPU.
-    studio.get_object_by_name("Channel Settings").get_component("ChannelSettings").device = "cpu"
+    # The RadioMap is the scene-config carrier; force CPU so the round trip needs no GPU.
+    studio.get_object_by_name("RadioMap").get_component("RadioMap").device = "cpu"
 
     platform = adapter.to_platform(studio)
-    assert {s.name for s in platform.structures} == {"ground"}
-    assert {t.name for t in platform.transmitters} == {"tx"}
-    assert {r.name for r in platform.receivers} == {"rmap", "rx"}  # grid + point Rx for path solve
+    assert {s.name for s in platform.structures} == {"Channel Ground"}
+    assert {t.name for t in platform.transmitters} == {"Tx"}
+    assert {r.name for r in platform.receivers} == {"RadioMap", "Rx"}  # grid + point Rx
     assert platform.structures[0].material.itu_descriptor == ("concrete", None)
 
 
 def test_default_solver_is_montecarlo():
     # Deterministic needs its OptiX pipeline to compile; MC is the robust default.
-    from wt_channel.components.result import ChannelResultComponent
+    from wt_channel.components.radiomap import RadioMapComponent
 
-    assert str(ChannelResultComponent().solver) == "montecarlo"
+    assert str(RadioMapComponent().solver) == "montecarlo"
 
 
 # --- live solve (CUDA) ---------------------------------------------------------
@@ -209,10 +209,10 @@ def _run_live(adapter, solver):
     from wt_channel.adapter.solve import RadioMapExtractor, SolveRunner
 
     studio = adapter.to_studio(_live_scene())
-    comp = studio.get_object_by_name("Channel Settings").get_component("ChannelResult")
-    comp.solver, comp.transmitter, comp.receiver_grid = solver, "tx", "rmap"
+    comp = studio.get_object_by_name("rmap").get_component("RadioMap")  # the grid is a RadioMap
+    comp.solver = solver
     comp.det_num_samples = comp.mc_num_samples = 2000
-    result = SolveRunner.run(studio, comp)
+    result = SolveRunner.run(studio, comp, transmitter="tx", receiver="rmap")
     return result, RadioMapExtractor._to_numpy(result.squeeze_tx(0).path_gain)
 
 

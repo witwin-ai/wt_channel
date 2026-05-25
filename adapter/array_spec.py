@@ -1,16 +1,15 @@
-"""Antenna array interchange: ``AntennaArraySpec`` component <-> platform array.
+"""Antenna interchange: a Tx/Rx component's inline antenna fields <-> platform array.
 
-The platform offers a generic ``AntennaArray`` (explicit element positions) and the
-``ULA`` / ``UPA`` presets (both subclasses of ``PlanarArray``). ``to_platform`` builds
-the right class from the component's ``array_kind``; ``to_studio`` detects the class
-(ULA, then UPA / PlanarArray, then generic) and fills the component. Polarization
-round-trips as a preset name when it matches ``v/h/vh/cross``, else as raw complex
-3-vector slots (real + imaginary lists).
+The antenna lives directly on the endpoint component (``ChannelTx`` / ``ChannelRx``):
+``array_kind`` selects a single element, a ULA / UPA preset, or a custom element layout,
+with ``pattern`` and ``array_polarization`` shared across all kinds. ``to_platform``
+returns ``None`` for the plain default (single iso/V element) so the platform applies its
+own ``default_array()``; any non-default antenna becomes an explicit ``AntennaArray`` /
+``ULA`` / ``UPA``. Polarization round-trips as a preset name (``v/h/vh/cross``) when it
+matches, else as raw complex 3-vector slots (real + imaginary lists).
 """
 import math
-from typing import Any, List, Optional, Tuple
-
-from witwin_server import SceneObject
+from typing import Any, Optional, Tuple
 
 from .common import num, vec
 
@@ -27,61 +26,52 @@ _POL_PRESETS = {
 
 
 class ArraySpecMap:
-    """``AntennaArraySpec`` component <-> ``AntennaArray`` / ``ULA`` / ``UPA``."""
+    """A Tx/Rx component's antenna fields <-> ``AntennaArray`` / ``ULA`` / ``UPA``."""
 
     @staticmethod
-    def to_platform(ch: Any, spec: Any) -> Any:
-        """Build the platform antenna array from an ``AntennaArraySpec`` component."""
-        kind = str(spec.array_kind)
-        pattern = str(spec.pattern)
-        polarization = ArraySpecMap._pol_to_platform(spec)
+    def to_platform(ch: Any, comp: Any) -> Optional[Any]:
+        """Build the platform antenna array, or ``None`` for the plain default element."""
+        kind = str(comp.array_kind)
+        pattern = str(comp.pattern)
+        polarization = ArraySpecMap._pol_to_platform(comp)
+        if kind == "single":
+            if pattern == "iso" and str(comp.array_polarization) == "v":
+                return None  # plain default element -> let the platform supply default_array()
+            return ch.AntennaArray(element_positions=[(0.0, 0.0, 0.0)],
+                                   polarization=polarization, pattern=pattern)
         if kind == "ula":
-            return ch.ULA(num_elements=int(spec.num_elements), spacing=num(spec.spacing),
-                          axis=str(spec.axis), polarization=polarization, pattern=pattern)
+            return ch.ULA(num_elements=int(comp.num_elements), spacing=num(comp.spacing),
+                          axis=str(comp.ula_axis), polarization=polarization, pattern=pattern)
         if kind == "upa":
-            return ch.UPA(num_rows=int(spec.num_rows), num_cols=int(spec.num_cols),
-                          vertical_spacing=num(spec.vertical_spacing),
-                          horizontal_spacing=num(spec.horizontal_spacing),
+            return ch.UPA(num_rows=int(comp.num_rows), num_cols=int(comp.num_cols),
+                          vertical_spacing=num(comp.vertical_spacing),
+                          horizontal_spacing=num(comp.horizontal_spacing),
                           polarization=polarization, pattern=pattern)
-        positions = [vec(p) for p in spec.element_positions]
+        positions = [vec(p) for p in comp.element_positions]
         orientations = None
-        if bool(spec.use_element_orientations) and len(spec.element_orientations) > 0:
-            orientations = [vec(o) for o in spec.element_orientations]
+        if bool(comp.use_element_orientations) and len(comp.element_orientations) > 0:
+            orientations = [vec(o) for o in comp.element_orientations]
         return ch.AntennaArray(element_positions=positions, element_orientations=orientations,
                                polarization=polarization, pattern=pattern)
 
     @staticmethod
-    def to_studio(spec: Any, array: Any) -> None:
-        """Fill an ``AntennaArraySpec`` component from a platform antenna array."""
-        spec.pattern = str(array.pattern)
-        ArraySpecMap._pol_to_studio(spec, array.polarization_slots)
+    def to_studio(comp: Any, array: Optional[Any]) -> None:
+        """Fill a Tx/Rx component's antenna fields from a platform array (None -> default)."""
+        if array is None:
+            return  # defaults (single / iso / V) already on the component
+        comp.pattern = str(array.pattern)
+        ArraySpecMap._pol_to_studio(comp, array.polarization_slots)
         kind = ArraySpecMap._detect_kind(array)
-        spec.array_kind = kind
+        comp.array_kind = kind
         if kind == "ula":
-            ArraySpecMap._fill_ula(spec, array)
+            ArraySpecMap._fill_ula(comp, array)
         elif kind == "upa":
-            spec.num_rows = int(array.num_rows)
-            spec.num_cols = int(array.num_cols)
-            spec.vertical_spacing = float(array.vertical_spacing)
-            spec.horizontal_spacing = float(array.horizontal_spacing)
-        else:
-            ArraySpecMap._fill_custom(spec, array)
-
-    @staticmethod
-    def resolve(endpoint_array: Optional[Any], scene_array: Optional[Any]) -> Optional[Any]:
-        """Documented resolution order: endpoint array, else scene array, else None.
-
-        ``None`` means the platform applies ``default_array()`` at solve time.
-        """
-        if endpoint_array is not None:
-            return endpoint_array
-        return scene_array
-
-    @staticmethod
-    def from_object(ch: Any, obj: SceneObject) -> Optional[Any]:
-        """Build a platform array from an object's ``AntennaArraySpec``, or None."""
-        spec = obj.get_component("AntennaArraySpec")
-        return None if spec is None else ArraySpecMap.to_platform(ch, spec)
+            comp.num_rows = int(array.num_rows)
+            comp.num_cols = int(array.num_cols)
+            comp.vertical_spacing = float(array.vertical_spacing)
+            comp.horizontal_spacing = float(array.horizontal_spacing)
+        elif kind == "custom":
+            ArraySpecMap._fill_custom(comp, array)
 
     # --- kind detection ------------------------------------------------------
 
@@ -94,41 +84,48 @@ class ArraySpecMap:
             return "ula"
         if isinstance(array, ch.PlanarArray):
             return "upa"
+        if array.num_elements == 1 and ArraySpecMap._is_origin(array):
+            return "single"
         return "custom"
 
     @staticmethod
-    def _fill_ula(spec: Any, array: Any) -> None:
-        # ULA stores its layout as num_rows/num_cols + per-axis spacing; recover axis.
-        if int(array.num_rows) == 1:
-            spec.axis = "x"
-            spec.num_elements = int(array.num_cols)
-            spec.spacing = float(array.horizontal_spacing)
-        else:
-            spec.axis = "y"
-            spec.num_elements = int(array.num_rows)
-            spec.spacing = float(array.vertical_spacing)
+    def _is_origin(array: Any) -> bool:
+        ep = array.element_positions
+        return all(abs(float(c)) <= TOL for c in (ep.x[0], ep.y[0], ep.z[0]))
 
     @staticmethod
-    def _fill_custom(spec: Any, array: Any) -> None:
+    def _fill_ula(comp: Any, array: Any) -> None:
+        # ULA stores its layout as num_rows/num_cols + per-axis spacing; recover axis.
+        if int(array.num_rows) == 1:
+            comp.ula_axis = "x"
+            comp.num_elements = int(array.num_cols)
+            comp.spacing = float(array.horizontal_spacing)
+        else:
+            comp.ula_axis = "y"
+            comp.num_elements = int(array.num_rows)
+            comp.spacing = float(array.vertical_spacing)
+
+    @staticmethod
+    def _fill_custom(comp: Any, array: Any) -> None:
         ep = array.element_positions
-        spec.element_positions = [[float(x), float(y), float(z)]
+        comp.element_positions = [[float(x), float(y), float(z)]
                                   for x, y, z in zip(ep.x, ep.y, ep.z)]
         orient = array.element_orientations
         if orient is not None:
-            spec.use_element_orientations = True
-            spec.element_orientations = [[float(x), float(y), float(z)]
+            comp.use_element_orientations = True
+            comp.element_orientations = [[float(x), float(y), float(z)]
                                          for x, y, z in zip(orient.x, orient.y, orient.z)]
 
     # --- polarization --------------------------------------------------------
 
     @staticmethod
-    def _pol_to_platform(spec: Any) -> Any:
+    def _pol_to_platform(comp: Any) -> Any:
         # Preset name passes straight through; 'custom' builds complex 3-vector slots.
-        name = str(spec.polarization)
+        name = str(comp.array_polarization)
         if name != "custom":
             return name
-        reals = [vec(s) for s in spec.pol_slots]
-        imags = [vec(s) for s in spec.pol_slots_imag]
+        reals = [vec(s) for s in comp.pol_slots]
+        imags = [vec(s) for s in comp.pol_slots_imag]
         slots = []
         for i, real in enumerate(reals):
             imag = imags[i] if i < len(imags) else (0.0, 0.0, 0.0)
@@ -136,16 +133,16 @@ class ArraySpecMap:
         return slots
 
     @staticmethod
-    def _pol_to_studio(spec: Any, slots: Tuple) -> None:
+    def _pol_to_studio(comp: Any, slots: Tuple) -> None:
         # Match a preset by value; otherwise store raw complex slots (real + imag).
         preset = ArraySpecMap._match_preset(slots)
         if preset is not None:
-            spec.polarization = preset
+            comp.array_polarization = preset
             return
-        spec.polarization = "custom"
-        spec.pol_slots = [[float(c.real) for c in slot] for slot in slots]
+        comp.array_polarization = "custom"
+        comp.pol_slots = [[float(c.real) for c in slot] for slot in slots]
         if any(abs(c.imag) > TOL for slot in slots for c in slot):
-            spec.pol_slots_imag = [[float(c.imag) for c in slot] for slot in slots]
+            comp.pol_slots_imag = [[float(c.imag) for c in slot] for slot in slots]
 
     @staticmethod
     def _match_preset(slots: Tuple) -> Optional[str]:

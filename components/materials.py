@@ -19,7 +19,7 @@ from witwin_server.components import (
     string_field,
 )
 
-from .settings import CATEGORY
+from .category import CATEGORY
 
 # Preset names from witwin.channel material_presets.ITU_MATERIALS_PROPERTIES.
 PRESET_NAMES = [

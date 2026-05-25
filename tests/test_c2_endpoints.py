@@ -111,18 +111,31 @@ def test_custom_complex_polarization_roundtrip(adapter):
     assert rebuilt.array.polarization_slots == (((1 + 0j), 0.5j, 0j),)
 
 
-def test_scene_default_arrays_roundtrip_and_resolution(adapter):
+def test_tx_default_array_roundtrips_to_none(adapter):
     import witwin.channel as ch
-    # tx has no array -> falls back to the scene default; rx grid has its own.
+    # A plain Tx (single iso/V element) exports no explicit array -> platform default.
     tx = ch.Transmitter(name="tx", position=(0, 0, 2))
-    grid = ch.ReceiverGrid(name="rm", axis="z", position=1.0, bounds=((-5, 5), (-5, 5)),
-                           grid_shape=(8, 8), array=ch.ULA(num_elements=2, spacing=0.5))
-    scene = _scene(transmitters=[tx], receivers=[grid],
-                   tx_array=ch.ULA(num_elements=8, spacing=0.5, axis="x"))
+    rebuilt = RT.by_name(RT.back(adapter, _scene(transmitters=[tx])).transmitters)["tx"]
+    assert rebuilt.array is None
+
+
+def test_scene_default_array_baked_into_endpoint(adapter):
+    import witwin.channel as ch
+    # No more scene-default arrays: the default is baked into each endpoint that lacks one.
+    tx = ch.Transmitter(name="tx", position=(0, 0, 2))
+    scene = _scene(transmitters=[tx], tx_array=ch.ULA(num_elements=8, spacing=0.5, axis="x"))
     rebuilt = RT.back(adapter, scene)
-    assert isinstance(rebuilt.tx_array, ch.ULA)
-    assert rebuilt.tx_array.num_elements == 8
-    # Documented resolution order: endpoint array, else scene array, else default.
-    assert rebuilt.transmitter("tx").array is None       # uses scene default
-    assert rebuilt.transmitter_array("tx").num_elements == 8
-    assert rebuilt.receiver("rm").array.num_elements == 2  # endpoint wins
+    assert rebuilt.tx_array is None
+    arr = rebuilt.transmitter("tx").array
+    assert isinstance(arr, ch.ULA)
+    assert arr.num_elements == 8
+
+
+def test_endpoint_array_overrides_scene_default(adapter):
+    import witwin.channel as ch
+    # An explicit endpoint array wins over the scene default (which is then ignored).
+    tx = ch.Transmitter(name="tx", position=(0, 0, 2),
+                        array=ch.ULA(num_elements=2, spacing=0.5, axis="x"))
+    scene = _scene(transmitters=[tx], tx_array=ch.ULA(num_elements=8, spacing=0.5, axis="x"))
+    rebuilt = RT.back(adapter, scene)
+    assert rebuilt.transmitter("tx").array.num_elements == 2

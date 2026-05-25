@@ -1,15 +1,17 @@
-"""Channel endpoints — Transmitter / Receiver / ReceiverGrid components.
+"""Channel endpoints — the ``Tx`` and ``Rx`` scene components.
 
 Each endpoint is an ``Empty`` ``SceneObject``: its world position is the object's
-``Transform`` (a point ``Receiver`` / ``Transmitter``), while the channel-specific
-fields (polarization, power, orientation) live on the component. The endpoint's
-antenna array, if any, is the sibling ``AntennaArraySpec`` component (plan §4.4).
+``Transform``, while the channel-specific fields (polarization, power, orientation)
+and the antenna definition live on the component itself. There is no separate antenna
+component — every Tx/Rx carries its own antenna inline under the ``Antenna`` group:
+a per-element ``pattern`` plus an ``array_kind`` (single element, ULA, UPA, or a custom
+element layout) and its polarization. ``array_kind="single"`` with ``pattern="iso"`` and
+``array_polarization="v"`` means "no explicit array" (the solver's default element).
 
-``ReceiverGrid`` is the 2D radiomap receiver: an axis-aligned plane (``axis`` +
-``position``) over a tangential ``bounds`` rectangle, sampled by **exactly one** of
-``grid_shape`` or ``cell_size`` (the platform ``GridSpec`` enforces the XOR).
-``orientation`` is a yaw/pitch/roll euler (radians), kept separate from the display
-``Transform`` rotation (it is the antenna's electrical orientation, not a pose).
+The antenna fields are declared on both components (rather than a shared base) so each
+endpoint controls its own field ordering; the component metaclass collects fields from
+``cls.__dict__`` only, so a plain mixin would be dropped. ``adapter.array_spec`` reads
+these identically-named fields from either component.
 """
 from witwin_server.components import (
     Component,
@@ -17,67 +19,103 @@ from witwin_server.components import (
     component,
     float_field,
     int_field,
+    list_field,
     string_field,
     vector3_field,
-    vector4_field,
 )
 
-from .settings import CATEGORY
+from .category import CATEGORY
 
-_GRID_SHAPE = {"field_name": "grid_mode", "operator": "eq", "value": "grid_shape"}
-_CELL_SIZE = {"field_name": "grid_mode", "operator": "eq", "value": "cell_size"}
+_ULA = {"field_name": "array_kind", "operator": "eq", "value": "ula"}
+_UPA = {"field_name": "array_kind", "operator": "eq", "value": "upa"}
+_CUSTOM = {"field_name": "array_kind", "operator": "eq", "value": "custom"}
+_POL_CUSTOM = {"field_name": "array_polarization", "operator": "eq", "value": "custom"}
 
 
-@component(name="ChannelTransmitter", category=CATEGORY)
-class TransmitterComponent(Component):
-    """Scene transmitter endpoint (position via the object's Transform).
+@component(name="ChannelTx", display_name="Tx", category=CATEGORY)
+class TxComponent(Component):
+    """Channel transmitter endpoint (position via the object's Transform).
 
-    Named ``ChannelTransmitter`` (not ``Transmitter``) to avoid colliding with the
-    core ``Transmitter`` component in the global registry — see PLATFORM plan §8
-    (core's transmitter/receiver components should later migrate here).
+    Named ``ChannelTx`` (not ``Transmitter``) to avoid colliding with the core
+    ``Transmitter`` component in the global registry.
     """
 
-    polarization = vector3_field([1.0, 0.0, 0.0], description="Linear polarization vector.")
+    polarization = vector3_field([1.0, 0.0, 0.0], description="Transmit field polarization vector.")
     power = float_field(1.0, min=1e-12, description="Transmit power (linear, > 0).")
     use_orientation = bool_field(False, title="Orientation")
     orientation = vector3_field([0.0, 0.0, 0.0], show_if="use_orientation",
                                 description="Antenna orientation euler (yaw, pitch, roll; rad).")
 
+    # --- antenna (inline) ---
+    pattern = string_field("iso", options=["iso", "dipole", "tr38901"], group="Antenna",
+                           title="Antenna", description="Per-element radiation pattern.")
+    array_kind = string_field("single", options=["single", "ula", "upa", "custom"],
+                              enum_toggle=True, group="Antenna",
+                              description="Single element, a ULA/UPA preset, or a custom layout.")
+    array_polarization = string_field("v", options=["v", "h", "vh", "cross", "custom"],
+                                      group="Antenna", description="Element polarization preset.")
+    num_elements = int_field(4, min=1, group="Antenna", show_if=_ULA)
+    spacing = float_field(0.5, min=0.0, group="Antenna", show_if=_ULA,
+                          description="Element spacing (m).")
+    ula_axis = string_field("x", options=["x", "y"], enum_toggle=True, group="Antenna", show_if=_ULA)
+    num_rows = int_field(2, min=1, group="Antenna", show_if=_UPA, horizontal_group="Grid")
+    num_cols = int_field(2, min=1, group="Antenna", show_if=_UPA, horizontal_group="Grid")
+    vertical_spacing = float_field(0.5, min=0.0, group="Antenna", show_if=_UPA,
+                                   horizontal_group="Spacing")
+    horizontal_spacing = float_field(0.5, min=0.0, group="Antenna", show_if=_UPA,
+                                     horizontal_group="Spacing")
+    element_positions = list_field(vector3_field(), default=[[0.0, 0.0, 0.0]], group="Antenna",
+                                   show_if=_CUSTOM, description="Local element offsets (m).")
+    use_element_orientations = bool_field(False, group="Antenna", show_if=_CUSTOM)
+    element_orientations = list_field(vector3_field(), default=[], group="Antenna",
+                                      show_if="use_element_orientations",
+                                      description="Per-element euler orientation (rad).")
+    pol_slots = list_field(vector3_field(), default=[[1.0, 0.0, 0.0]], group="Antenna",
+                           show_if=_POL_CUSTOM, description="Custom polarization slots (real part).")
+    pol_slots_imag = list_field(vector3_field(), default=[], group="Antenna", show_if=_POL_CUSTOM,
+                                description="Custom polarization slots (imaginary part; optional).")
 
-@component(name="ChannelReceiver", category=CATEGORY)
-class ReceiverComponent(Component):
-    """Scene point receiver endpoint (position via the object's Transform).
 
-    Named ``ChannelReceiver`` (not ``Receiver``) to avoid colliding with the core
-    ``Receiver`` component in the global registry (see PLATFORM plan §8).
+@component(name="ChannelRx", display_name="Rx", category=CATEGORY)
+class RxComponent(Component):
+    """Channel point receiver endpoint (position via the object's Transform).
+
+    Named ``ChannelRx`` (not ``Receiver``) to avoid colliding with the core
+    ``Receiver`` component in the global registry.
     """
 
     use_polarization = bool_field(False, title="Polarization")
     polarization = vector3_field([1.0, 0.0, 0.0], show_if="use_polarization",
-                                 description="Linear polarization vector.")
+                                 description="Receive field polarization vector.")
     use_orientation = bool_field(False, title="Orientation")
     orientation = vector3_field([0.0, 0.0, 0.0], show_if="use_orientation",
                                 description="Antenna orientation euler (yaw, pitch, roll; rad).")
 
-
-@component(name="ReceiverGrid", category=CATEGORY)
-class ReceiverGridComponent(Component):
-    """Axis-aligned 2D radiomap receiver grid (plan §4.3)."""
-
-    axis = string_field("z", options=["x", "y", "z"], enum_toggle=True,
-                        description="Plane normal axis.")
-    position = float_field(1.5, description="Plane offset along the axis (m).")
-    bounds = vector4_field([-5.0, 5.0, -5.0, 5.0],
-                           description="Tangential extents [min0, max0, min1, max1].")
-    grid_mode = string_field("grid_shape", options=["grid_shape", "cell_size"], enum_toggle=True,
-                             description="Discretize by cell counts or by cell size (exactly one).")
-    grid_nx = int_field(64, min=1, show_if=_GRID_SHAPE, horizontal_group="Grid shape")
-    grid_ny = int_field(64, min=1, show_if=_GRID_SHAPE, horizontal_group="Grid shape")
-    cell_dx = float_field(0.5, min=1e-6, show_if=_CELL_SIZE, horizontal_group="Cell size")
-    cell_dy = float_field(0.5, min=1e-6, show_if=_CELL_SIZE, horizontal_group="Cell size")
-
-    use_polarization = bool_field(False, title="Polarization")
-    polarization = vector3_field([1.0, 0.0, 0.0], show_if="use_polarization")
-    use_orientation = bool_field(False, title="Orientation")
-    orientation = vector3_field([0.0, 0.0, 0.0], show_if="use_orientation",
-                                description="Antenna orientation euler (yaw, pitch, roll; rad).")
+    # --- antenna (inline) ---
+    pattern = string_field("iso", options=["iso", "dipole", "tr38901"], group="Antenna",
+                           title="Antenna", description="Per-element radiation pattern.")
+    array_kind = string_field("single", options=["single", "ula", "upa", "custom"],
+                              enum_toggle=True, group="Antenna",
+                              description="Single element, a ULA/UPA preset, or a custom layout.")
+    array_polarization = string_field("v", options=["v", "h", "vh", "cross", "custom"],
+                                      group="Antenna", description="Element polarization preset.")
+    num_elements = int_field(4, min=1, group="Antenna", show_if=_ULA)
+    spacing = float_field(0.5, min=0.0, group="Antenna", show_if=_ULA,
+                          description="Element spacing (m).")
+    ula_axis = string_field("x", options=["x", "y"], enum_toggle=True, group="Antenna", show_if=_ULA)
+    num_rows = int_field(2, min=1, group="Antenna", show_if=_UPA, horizontal_group="Grid")
+    num_cols = int_field(2, min=1, group="Antenna", show_if=_UPA, horizontal_group="Grid")
+    vertical_spacing = float_field(0.5, min=0.0, group="Antenna", show_if=_UPA,
+                                   horizontal_group="Spacing")
+    horizontal_spacing = float_field(0.5, min=0.0, group="Antenna", show_if=_UPA,
+                                     horizontal_group="Spacing")
+    element_positions = list_field(vector3_field(), default=[[0.0, 0.0, 0.0]], group="Antenna",
+                                   show_if=_CUSTOM, description="Local element offsets (m).")
+    use_element_orientations = bool_field(False, group="Antenna", show_if=_CUSTOM)
+    element_orientations = list_field(vector3_field(), default=[], group="Antenna",
+                                      show_if="use_element_orientations",
+                                      description="Per-element euler orientation (rad).")
+    pol_slots = list_field(vector3_field(), default=[[1.0, 0.0, 0.0]], group="Antenna",
+                           show_if=_POL_CUSTOM, description="Custom polarization slots (real part).")
+    pol_slots_imag = list_field(vector3_field(), default=[], group="Antenna", show_if=_POL_CUSTOM,
+                                description="Custom polarization slots (imaginary part; optional).")

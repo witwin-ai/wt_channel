@@ -1,12 +1,14 @@
 """Endpoint interchange: channel endpoints <-> studio Empty objects.
 
-Each platform endpoint (``Transmitter`` / ``Receiver`` / ``ReceiverGrid``) becomes an
-``Empty`` ``SceneObject`` carrying the matching component, its world position on the
-object's ``Transform``, and (when set) a sibling ``AntennaArraySpec`` for ``.array``.
-Scene-default ``tx_array`` / ``rx_array`` ride dedicated ``ChannelDefaultArray``
-objects. ``orientation`` is the antenna euler (kept off the display Transform).
+Each platform endpoint becomes an ``Empty`` ``SceneObject`` carrying the matching
+component, its world position on the object's ``Transform``, and its antenna inline on
+the component. A platform ``Transmitter`` <-> a ``ChannelTx`` object; a point
+``Receiver`` <-> a ``ChannelRx`` object; a ``ReceiverGrid`` <-> a ``RadioMap`` object
+(the radiomap *is* the grid, named after itself). ``orientation`` is the antenna euler
+(kept off the display Transform). Scene-default ``tx_array`` / ``rx_array`` are baked
+into each endpoint that lacks an explicit array on import.
 """
-from typing import Any, List, Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from witwin_server import SceneObject
 
@@ -14,54 +16,59 @@ from .array_spec import ArraySpecMap
 from .common import num, opt_vec3, vec
 
 # Component names that identify each endpoint object.
-TX_COMPONENT = "ChannelTransmitter"
-RX_COMPONENT = "ChannelReceiver"
-GRID_COMPONENT = "ReceiverGrid"
-DEFAULT_ARRAY_COMPONENT = "ChannelDefaultArray"
-ENDPOINT_COMPONENTS = (TX_COMPONENT, RX_COMPONENT, GRID_COMPONENT)
+TX_COMPONENT = "ChannelTx"
+RX_COMPONENT = "ChannelRx"
+RADIOMAP_COMPONENT = "RadioMap"
 
 
 class EndpointMap:
-    """Channel endpoints + scene-default arrays <-> studio Empty objects."""
+    """Channel endpoints <-> studio Empty objects (antenna inline on the component)."""
 
     # --- platform -> studio --------------------------------------------------
 
     @staticmethod
-    def tx_to_studio(tx: Any) -> SceneObject:
-        """Build a Transmitter Empty object from a platform ``Transmitter``."""
-        from ..components.endpoints import TransmitterComponent
+    def tx_to_studio(tx: Any, scene_default_array: Optional[Any] = None) -> SceneObject:
+        """Build a Tx Empty object from a platform ``Transmitter``."""
+        from ..components.endpoints import TxComponent
 
         obj = SceneObject(name=tx.name, mesh_type="Empty")
-        comp = obj.add_component(TransmitterComponent())
-        comp.polarization = list(tx.polarization)
+        comp = obj.add_component(TxComponent())
+        if tx.polarization is not None:
+            comp.polarization = list(tx.polarization)
         comp.power = float(tx.power)
         EndpointMap._write_orientation(comp, tx.orientation)
         EndpointMap._set_position(obj, tx.position)
-        EndpointMap._attach_array(obj, tx.array)
+        ArraySpecMap.to_studio(comp, tx.array if tx.array is not None else scene_default_array)
         return obj
 
     @staticmethod
-    def rx_to_studio(rx: Any) -> SceneObject:
-        """Build a Receiver Empty object from a platform ``Receiver``."""
-        from ..components.endpoints import ReceiverComponent
+    def rx_to_studio(rx: Any, scene_default_array: Optional[Any] = None) -> SceneObject:
+        """Build an Rx Empty object from a platform ``Receiver``."""
+        from ..components.endpoints import RxComponent
 
         obj = SceneObject(name=rx.name, mesh_type="Empty")
-        comp = obj.add_component(ReceiverComponent())
+        comp = obj.add_component(RxComponent())
         EndpointMap._write_polarization(comp, rx.polarization)
         EndpointMap._write_orientation(comp, rx.orientation)
         EndpointMap._set_position(obj, rx.position)
-        EndpointMap._attach_array(obj, rx.array)
+        ArraySpecMap.to_studio(comp, rx.array if rx.array is not None else scene_default_array)
         return obj
 
     @staticmethod
-    def grid_to_studio(grid: Any) -> SceneObject:
-        """Build a ReceiverGrid Empty object from a platform ``ReceiverGrid``."""
-        from ..components.endpoints import ReceiverGridComponent
+    def radiomap_to_studio(grid: Any, *, frequency: Optional[float], device: str,
+                           noise_power: Optional[float] = None) -> SceneObject:
+        """Build a RadioMap Empty object from a platform ``ReceiverGrid`` + scene config."""
+        from ..components.radiomap import RadioMapComponent
 
         obj = SceneObject(name=grid.name, mesh_type="Empty")
-        comp = obj.add_component(ReceiverGridComponent())
+        comp = obj.add_component(RadioMapComponent())
+        comp.frequency = 0.0 if frequency is None else float(frequency)
+        comp.device = device
+        if noise_power is not None:
+            comp.use_noise_power = True
+            comp.noise_power = float(noise_power)
         comp.axis = str(grid.axis)
-        comp.position = float(grid.position)
+        comp.height = float(grid.position)
         comp.bounds = [float(grid.bounds[0][0]), float(grid.bounds[0][1]),
                        float(grid.bounds[1][0]), float(grid.bounds[1][1])]
         if grid.grid_shape is not None:
@@ -70,51 +77,35 @@ class EndpointMap:
         else:
             comp.grid_mode = "cell_size"
             comp.cell_dx, comp.cell_dy = float(grid.cell_size[0]), float(grid.cell_size[1])
-        EndpointMap._write_polarization(comp, grid.polarization)
-        EndpointMap._write_orientation(comp, grid.orientation)
         EndpointMap._set_position(obj, EndpointMap._grid_center(grid.axis, grid.position, grid.bounds))
-        EndpointMap._attach_array(obj, grid.array)
-        return obj
-
-    @staticmethod
-    def default_array_to_studio(role: str, array: Any) -> SceneObject:
-        """Build a scene-default-array Empty (Scene.tx_array / rx_array)."""
-        from ..components.antenna import (
-            AntennaArraySpecComponent,
-            ChannelDefaultArrayComponent,
-        )
-
-        obj = SceneObject(name=f"Channel {role.upper()} Array", mesh_type="Empty")
-        obj.add_component(ChannelDefaultArrayComponent()).role = role
-        ArraySpecMap.to_studio(obj.add_component(AntennaArraySpecComponent()), array)
         return obj
 
     # --- studio -> platform --------------------------------------------------
 
     @staticmethod
     def tx_to_platform(ch: Any, obj: SceneObject) -> Any:
-        """Build a platform ``Transmitter`` from a Transmitter object."""
+        """Build a platform ``Transmitter`` from a Tx object."""
         comp = obj.get_component(TX_COMPONENT)
         return ch.Transmitter(
             name=obj.name, position=tuple(vec(EndpointMap._position(obj))),
             polarization=tuple(vec(comp.polarization)), power=num(comp.power),
             orientation=EndpointMap._read_orientation(comp),
-            array=ArraySpecMap.from_object(ch, obj))
+            array=ArraySpecMap.to_platform(ch, comp))
 
     @staticmethod
     def rx_to_platform(ch: Any, obj: SceneObject) -> Any:
-        """Build a platform ``Receiver`` from a Receiver object."""
+        """Build a platform ``Receiver`` from an Rx object."""
         comp = obj.get_component(RX_COMPONENT)
         return ch.Receiver(
             name=obj.name, position=tuple(vec(EndpointMap._position(obj))),
             polarization=EndpointMap._read_polarization(comp),
             orientation=EndpointMap._read_orientation(comp),
-            array=ArraySpecMap.from_object(ch, obj))
+            array=ArraySpecMap.to_platform(ch, comp))
 
     @staticmethod
-    def grid_to_platform(ch: Any, obj: SceneObject) -> Any:
-        """Build a platform ``ReceiverGrid`` from a ReceiverGrid object."""
-        comp = obj.get_component(GRID_COMPONENT)
+    def radiomap_to_platform(ch: Any, obj: SceneObject) -> Any:
+        """Build a platform ``ReceiverGrid`` from a RadioMap object (the grid)."""
+        comp = obj.get_component(RADIOMAP_COMPONENT)
         b = vec(comp.bounds)
         bounds = ((b[0], b[1]), (b[2], b[3]))
         grid_shape = cell_size = None
@@ -122,30 +113,10 @@ class EndpointMap:
             grid_shape = (int(comp.grid_nx), int(comp.grid_ny))
         else:
             cell_size = (num(comp.cell_dx), num(comp.cell_dy))
-        return ch.ReceiverGrid(
-            name=obj.name, axis=str(comp.axis), position=num(comp.position), bounds=bounds,
-            grid_shape=grid_shape, cell_size=cell_size,
-            polarization=EndpointMap._read_polarization(comp),
-            orientation=EndpointMap._read_orientation(comp),
-            array=ArraySpecMap.from_object(ch, obj))
-
-    @staticmethod
-    def receiver_to_platform(ch: Any, obj: SceneObject) -> Any:
-        """Dispatch a receiver object to a point Receiver or a ReceiverGrid."""
-        if obj.get_component(GRID_COMPONENT) is not None:
-            return EndpointMap.grid_to_platform(ch, obj)
-        return EndpointMap.rx_to_platform(ch, obj)
+        return ch.ReceiverGrid(name=obj.name, axis=str(comp.axis), position=num(comp.height),
+                               bounds=bounds, grid_shape=grid_shape, cell_size=cell_size)
 
     # --- helpers -------------------------------------------------------------
-
-    @staticmethod
-    def _attach_array(obj: SceneObject, array: Optional[Any]) -> None:
-        # Give the endpoint object an AntennaArraySpec iff it has an explicit array.
-        if array is None:
-            return
-        from ..components.antenna import AntennaArraySpecComponent
-
-        ArraySpecMap.to_studio(obj.add_component(AntennaArraySpecComponent()), array)
 
     @staticmethod
     def _set_position(obj: SceneObject, position: Any) -> None:

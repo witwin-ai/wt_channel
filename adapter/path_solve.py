@@ -68,14 +68,18 @@ class PathSolveRunner:
     """Rebuild the platform scene and run a point-to-point path solve."""
 
     @staticmethod
-    def run(studio_scene: Any, comp: Any) -> Any:
-        """Run ``path.solve`` for the named Tx/Rx; returns a ``PathResult``."""
+    def run(studio_scene: Any, comp: Any, *, transmitter: str, receiver: str) -> Any:
+        """Run ``path.solve`` for the given Tx/Rx; returns a ``PathResult``."""
         import witwin.channel as ch
 
-        platform = ChannelAdapter().to_platform(studio_scene)
+        frequency = num(comp.frequency)
+        noise = num(comp.noise_power) if bool(comp.use_noise_power) else None
+        platform = ChannelAdapter().build(
+            studio_scene, frequency=frequency if frequency > 0.0 else None,
+            device=str(comp.device), noise_power=noise)
         config = PathConfigBuilder.build(ch, comp)
-        return ch.path.solve(scene=platform, transmitter=str(comp.transmitter),
-                             receiver=str(comp.receiver), config=config)
+        return ch.path.solve(scene=platform, transmitter=transmitter,
+                             receiver=receiver, config=config)
 
 
 class PathLineBuilder:

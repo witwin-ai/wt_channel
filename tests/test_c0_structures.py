@@ -72,8 +72,12 @@ def test_structure_metadata_roundtrip(adapter, scene):
     assert rebuilt["post"].enabled is True
 
 
-def test_export_without_settings_raises(adapter):
+def test_export_empty_scene_is_empty(adapter):
+    # Config now rides RadioMap / PathSolver; an empty studio scene exports an empty
+    # channel scene (default frequency) rather than raising.
     from witwin_server import Scene as StudioScene
     empty = StudioScene(kind="local")
-    with pytest.raises(ValueError, match="Channel Settings"):
-        adapter.to_platform(empty)
+    scene = adapter.to_platform(empty)
+    assert list(scene.structures) == []
+    assert list(scene.transmitters) == []
+    assert list(scene.receivers) == []

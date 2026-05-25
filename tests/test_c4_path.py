@@ -91,9 +91,9 @@ def test_cfr_plot_data():
 def test_path_config_builder():
     import witwin.channel as ch
     from wt_channel.adapter.path_solve import PathConfigBuilder
-    from wt_channel.components.path import PathSolveComponent
+    from wt_channel.components.pathsolver import PathSolverComponent
 
-    comp = PathSolveComponent()
+    comp = PathSolverComponent()
     comp.num_samples = 5000
     comp.max_bounces = 4
     comp.max_diffraction_order = 2
@@ -124,10 +124,9 @@ def test_live_path_solve(adapter, path_ready):
         frequency=3.5e9, device="cuda",
     )
     studio = adapter.to_studio(scene)
-    comp = studio.get_object_by_name("Channel Settings").get_component("PathSolve")
-    comp.transmitter, comp.receiver = "tx", "rx"
+    comp = studio.get_object_by_name("Path Solver").get_component("PathSolver")
     comp.num_samples = 2000
-    result = PathSolveRunner.run(studio, comp)
+    result = PathSolveRunner.run(studio, comp, transmitter="tx", receiver="rx")
     assert result.vertices is not None
     lines = PathLineBuilder.build(result)
     assert len(lines) >= 1   # at least the LoS path
