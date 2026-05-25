@@ -14,8 +14,8 @@ from .array_spec import ArraySpecMap
 from .common import num, opt_vec3, vec
 
 # Component names that identify each endpoint object.
-TX_COMPONENT = "Transmitter"
-RX_COMPONENT = "Receiver"
+TX_COMPONENT = "ChannelTransmitter"
+RX_COMPONENT = "ChannelReceiver"
 GRID_COMPONENT = "ReceiverGrid"
 DEFAULT_ARRAY_COMPONENT = "ChannelDefaultArray"
 ENDPOINT_COMPONENTS = (TX_COMPONENT, RX_COMPONENT, GRID_COMPONENT)

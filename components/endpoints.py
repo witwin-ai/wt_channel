@@ -28,9 +28,14 @@ _GRID_SHAPE = {"field_name": "grid_mode", "operator": "eq", "value": "grid_shape
 _CELL_SIZE = {"field_name": "grid_mode", "operator": "eq", "value": "cell_size"}
 
 
-@component(name="Transmitter", category=CATEGORY)
+@component(name="ChannelTransmitter", category=CATEGORY)
 class TransmitterComponent(Component):
-    """Scene transmitter endpoint (position via the object's Transform)."""
+    """Scene transmitter endpoint (position via the object's Transform).
+
+    Named ``ChannelTransmitter`` (not ``Transmitter``) to avoid colliding with the
+    core ``Transmitter`` component in the global registry — see PLATFORM plan §8
+    (core's transmitter/receiver components should later migrate here).
+    """
 
     polarization = vector3_field([1.0, 0.0, 0.0], description="Linear polarization vector.")
     power = float_field(1.0, min=1e-12, description="Transmit power (linear, > 0).")
@@ -39,9 +44,13 @@ class TransmitterComponent(Component):
                                 description="Antenna orientation euler (yaw, pitch, roll; rad).")
 
 
-@component(name="Receiver", category=CATEGORY)
+@component(name="ChannelReceiver", category=CATEGORY)
 class ReceiverComponent(Component):
-    """Scene point receiver endpoint (position via the object's Transform)."""
+    """Scene point receiver endpoint (position via the object's Transform).
+
+    Named ``ChannelReceiver`` (not ``Receiver``) to avoid colliding with the core
+    ``Receiver`` component in the global registry (see PLATFORM plan §8).
+    """
 
     use_polarization = bool_field(False, title="Polarization")
     polarization = vector3_field([1.0, 0.0, 0.0], show_if="use_polarization",

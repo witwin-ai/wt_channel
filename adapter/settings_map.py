@@ -30,6 +30,7 @@ class SettingsMap:
     @staticmethod
     def to_studio(scene: Any) -> SceneObject:
         """Build the Channel Settings ``Empty`` object from a ``channel.Scene``."""
+        from ..components.path import PathSolveComponent
         from ..components.result import ChannelResultComponent
         from ..components.settings import ChannelSettingsComponent
 
@@ -41,7 +42,8 @@ class SettingsMap:
         if noise is not None:
             comp.use_noise_power = True
             comp.noise_power = float(noise)
-        obj.add_component(ChannelResultComponent())  # solve button + radiomap viz (no round-trip data)
+        obj.add_component(ChannelResultComponent())  # radiomap solve + 2D field viz (no round-trip data)
+        obj.add_component(PathSolveComponent())       # point-to-point path solve + ray drawing
         return obj
 
     @staticmethod

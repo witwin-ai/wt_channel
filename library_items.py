@@ -25,12 +25,14 @@ def _settings_object(name="Channel Settings"):
     # Build the config singleton directly (no platform Scene needed, so no CUDA at drop).
     from witwin_server import SceneObject
 
+    from .components.path import PathSolveComponent
     from .components.result import ChannelResultComponent
     from .components.settings import ChannelSettingsComponent
 
     obj = SceneObject(name=name, mesh_type="Empty")
     obj.add_component(ChannelSettingsComponent()).frequency = _DEFAULT_FREQ
     obj.add_component(ChannelResultComponent())
+    obj.add_component(PathSolveComponent())
     return obj
 
 
