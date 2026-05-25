@@ -12,14 +12,10 @@ solvers, and 2D radiomap visualization.
 from typing import Any, List, Optional
 
 from witwin_server import Scene, SceneObject
-from witwin_server.platform_bridge import (
-    GeometryMap,
-    MaterialMap,
-    StructureMap,
-    TransformMap,
-)
+from witwin_server.platform_bridge import GeometryMap, StructureMap, TransformMap
 
 from .common import num, vec
+from .material_map import ChannelMaterialMap
 from .settings_map import MARKER_COMPONENT, SettingsMap
 
 
@@ -42,7 +38,9 @@ class ChannelAdapter:
         studio.begin_batch()
         studio.add_object(SettingsMap.to_studio(scene))
         for structure in scene.structures:
-            studio.add_object(StructureMap.to_studio(structure))
+            obj = StructureMap.to_studio(structure)
+            ChannelMaterialMap.overlay_studio(obj, structure.material)
+            studio.add_object(obj)
         studio.end_batch()
         return studio
 
@@ -60,7 +58,7 @@ class ChannelAdapter:
         config = SettingsMap.build_config(settings_obj)
 
         structures = [
-            self._structure_to_platform(ch, obj)
+            self._structure_to_platform(ch, obj, config.frequency)
             for obj in studio_scene.objects.values()
             if obj is not settings_obj and obj.get_component("PlatformGeometry") is not None
         ]
@@ -80,7 +78,7 @@ class ChannelAdapter:
         return None
 
     @classmethod
-    def _structure_to_platform(cls, ch: Any, obj: SceneObject) -> Any:
+    def _structure_to_platform(cls, ch: Any, obj: SceneObject, scene_frequency: Optional[float]) -> Any:
         # Geometry + transform via the frozen base maps; material via channel resolver.
         geom = obj.get_component("PlatformGeometry")
         transform = obj.get_component("Transform")
@@ -96,7 +94,7 @@ class ChannelAdapter:
         geometry = GeometryMap.to_platform(geom, position, rotation_quat,
                                            vertices=vertices, faces=faces)
 
-        material = cls._material_to_platform(ch, obj)
+        material = ChannelMaterialMap.to_platform(ch, obj, scene_frequency)
 
         meta = obj.get_component("StructureMeta")
         if meta is None:
@@ -108,12 +106,3 @@ class ChannelAdapter:
             tags=tuple(str(tag) for tag in meta.tags),
             metadata=dict(meta.metadata),
         )
-
-    @staticmethod
-    def _material_to_platform(ch: Any, obj: SceneObject) -> Any:
-        # Channel structures use scalar ``core.Material`` only (Fresnel). Maxwell-only
-        # advanced fields are dropped here (master §4.1). ITU presets land in C1.
-        em = obj.get_component("EMMaterial")
-        if em is not None:
-            return MaterialMap.to_platform(em)
-        return ch.Material()

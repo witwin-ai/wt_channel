@@ -5,3 +5,4 @@ registry when imported. The package ``__init__`` imports every module so a singl
 ``from wt_channel import components`` pulls them all in.
 """
 from . import settings  # noqa: F401  (ChannelSettings)
+from . import materials  # noqa: F401  (MaterialPreset)
