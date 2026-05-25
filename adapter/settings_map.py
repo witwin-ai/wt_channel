@@ -30,6 +30,7 @@ class SettingsMap:
     @staticmethod
     def to_studio(scene: Any) -> SceneObject:
         """Build the Channel Settings ``Empty`` object from a ``channel.Scene``."""
+        from ..components.result import ChannelResultComponent
         from ..components.settings import ChannelSettingsComponent
 
         obj = SceneObject(name=SETTINGS_NAME, mesh_type="Empty")
@@ -40,6 +41,7 @@ class SettingsMap:
         if noise is not None:
             comp.use_noise_power = True
             comp.noise_power = float(noise)
+        obj.add_component(ChannelResultComponent())  # solve button + radiomap viz (no round-trip data)
         return obj
 
     @staticmethod

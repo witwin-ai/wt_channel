@@ -16,6 +16,7 @@ component) is in core and frozen; this plugin only reads/writes it.
 from witwin_server.handlers.platform_scene import PlatformSceneHandler
 
 from . import components  # noqa: F401  (side-effect: registers channel components)
+from . import library_items  # noqa: F401  (side-effect: registers Channel library prefabs)
 from .adapter import ChannelAdapter
 
 PlatformSceneHandler.register_adapter("channel", ChannelAdapter())
