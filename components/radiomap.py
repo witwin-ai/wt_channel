@@ -186,13 +186,21 @@ class RadioMapComponent(FieldComponent):
         return "Map updated"
 
     def _to_plane_volume(self, data2d: np.ndarray) -> np.ndarray:
-        # Embed the (g0, g1) tangential map into a thin 3D volume on the selected plane.
+        """Embed the solved map into a thin world-axis volume aligned to the field region.
+
+        The platform radiomap tensor is ``(n_bounds1, n_bounds0)`` (rows = second
+        tangential / ``v`` axis, cols = first tangential / ``u`` axis), so ``data2d[iv, iu]``
+        is the value at tangential cell ``(u=iu, v=iv)``. The Field volume is indexed by
+        world axes ``(X, Y, Z)``; ``t0``/``t1`` are the plane's world tangential-axis
+        indices (``u``/``v``) and ``normal`` is its thin axis. Transposing ``data2d`` lines
+        the ``u`` axis up with ``t0`` and ``v`` with ``t1`` so the map matches the scene.
+        """
         normal, t0, t1 = PLANE_AXES[str(self.plane)]
-        g0, g1 = int(data2d.shape[0]), int(data2d.shape[1])
+        n_v, n_u = int(data2d.shape[0]), int(data2d.shape[1])
         shape = [1, 1, 1]
-        shape[t0], shape[t1] = g0, g1
+        shape[t0], shape[t1] = n_u, n_v
         vol = np.zeros(shape, dtype=np.float32)
-        np.moveaxis(vol, (t0, t1, normal), (0, 1, 2))[:, :, 0] = np.asarray(data2d, dtype=np.float32)
+        np.moveaxis(vol, (t0, t1, normal), (0, 1, 2))[:, :, 0] = np.asarray(data2d, dtype=np.float32).T
         return vol
 
     def _resolve_transmitter(self, scene):

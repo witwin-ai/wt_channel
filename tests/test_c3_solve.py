@@ -190,6 +190,29 @@ def test_default_solver_is_montecarlo():
     assert str(RadioMapComponent().solver) == "montecarlo"
 
 
+def test_radiomap_is_field_locked_to_xz():
+    from wt_channel.components.radiomap import RadioMapComponent
+
+    comp = RadioMapComponent()
+    assert "Field" in comp._get_base_class_names()  # inherits Field -> gizmo + plane viz
+    assert str(comp.plane) == "XZ"
+    assert comp._fields_meta["plane"].hidden is True  # locked (not switchable in UI)
+
+
+def test_radiomap_plane_volume_orientation():
+    # The platform tensor is (n_v=bounds1, n_u=bounds0); the field volume must be world
+    # axis-aligned so data[iv, iu] lands at world (t0=iu, t1=iv) on the XZ plane.
+    from wt_channel.components.radiomap import RadioMapComponent
+
+    comp = RadioMapComponent()  # plane XZ -> t0=X(0), t1=Z(2), normal=Y(1)
+    data = np.array([[10.0, 11.0, 12.0], [20.0, 21.0, 22.0]], dtype=np.float32)  # (nZ=2, nX=3)
+    vol = comp._to_plane_volume(data)
+    assert vol.shape == (3, 1, 2)  # (nX, 1, nZ)
+    for iz in range(2):
+        for ix in range(3):
+            assert vol[ix, 0, iz] == data[iz, ix]
+
+
 # --- live solve (CUDA) ---------------------------------------------------------
 
 def _live_scene():
