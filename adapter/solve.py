@@ -140,15 +140,22 @@ class RadioMapExtractor:
     """Extract a 2D map (data + extent) from a ``RadioMapResult``."""
 
     @staticmethod
-    def extract(result: Any, *, metric: str, tx_index: int,
-                bounds: List[float], log_scale: bool) -> MapImage:
-        """Squeeze to one Tx, read ``metric`` as a (ny, nx) array, build the extent."""
+    def extract(result: Any, *, metric: str, tx_index: int, bounds: List[float],
+                log_scale: bool, vmin: Optional[float] = None,
+                vmax: Optional[float] = None) -> MapImage:
+        """Squeeze to one Tx, read ``metric`` as a (ny, nx) array, build the extent.
+
+        ``vmin`` / ``vmax`` (in the displayed units — dB when ``log_scale``) clamp the
+        value window so the heatmap re-scales to exactly that range, without re-solving.
+        """
         single = result.squeeze_tx(int(tx_index))
         data = RadioMapExtractor._to_numpy(getattr(single, metric))
         label = metric
         if log_scale:
             data = 10.0 * np.log10(np.abs(data) + 1e-30)
             label = f"{metric} (dB)"
+        if vmin is not None or vmax is not None:
+            data = np.clip(data, vmin, vmax)
         extent = [float(bounds[0]), float(bounds[1]), float(bounds[2]), float(bounds[3])]
         return MapImage(np.asarray(data, dtype=np.float32), extent, label)
 

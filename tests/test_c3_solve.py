@@ -127,6 +127,35 @@ def test_edge_policy_default_and_overrides():
 
 # --- library prefabs (CPU) -----------------------------------------------------
 
+class _FakeResult:
+    """Minimal RadioMapResult stand-in for testing the value-range windowing on CPU."""
+
+    def __init__(self, arr):
+        import torch
+        self._arr = torch.as_tensor(arr, dtype=torch.float32)
+
+    def squeeze_tx(self, index):
+        return self
+
+    @property
+    def path_gain(self):
+        return self._arr
+
+
+def test_value_range_clamps_without_resolve():
+    from wt_channel.adapter.solve import RadioMapExtractor
+
+    result = _FakeResult([[1.0, 10.0], [100.0, 1000.0]])  # linear; 0/10/20/30 dB
+    full = RadioMapExtractor.extract(result, metric="path_gain", tx_index=0,
+                                     bounds=[-1, 1, -1, 1], log_scale=True)
+    np.testing.assert_allclose(sorted(full.data.flatten()), [0.0, 10.0, 20.0, 30.0], atol=1e-3)
+    # Windowing to [5, 25] dB clamps the extremes (re-window, same stored result).
+    windowed = RadioMapExtractor.extract(result, metric="path_gain", tx_index=0,
+                                         bounds=[-1, 1, -1, 1], log_scale=True, vmin=5.0, vmax=25.0)
+    assert float(windowed.data.min()) == pytest.approx(5.0)
+    assert float(windowed.data.max()) == pytest.approx(25.0)
+
+
 def test_library_items_registered(wtc):
     from witwin_server.handlers.library import _pending_items
 

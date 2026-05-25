@@ -22,7 +22,7 @@ from witwin_server.components import (
 )
 from witwin_server.platform_bridge import FieldViz
 
-from ..adapter.common import vec
+from ..adapter.common import num, vec
 from ..adapter.solve import RadioMapExtractor, SolveRunner
 from .settings import CATEGORY
 
@@ -115,6 +115,12 @@ class ChannelResultComponent(Component):
                           title="Radiomap")
     tx_index = int_field(0, min=0, description="Transmitter index (multi-Tx results).")
     log_scale = bool_field(True, description="Show the map in dB (10*log10).")
+    auto_range = bool_field(True, title="Value range",
+                            description="Autoscale the color range; uncheck to window it (no re-solve).")
+    range_min = float_field(-120.0, hide_if="auto_range", horizontal_group="Range",
+                            description="Min displayed value (dB if log scale).")
+    range_max = float_field(-40.0, hide_if="auto_range", horizontal_group="Range",
+                            description="Max displayed value (dB if log scale).")
     send_to_results = bool_field(True, description="Also publish to the versioned Results panel.")
     result_figure = figure(title="Radiomap")
 
@@ -135,9 +141,12 @@ class ChannelResultComponent(Component):
     def update_map(self):
         if self._result is None:
             return "Solve first"
+        auto = bool(self.auto_range)
         img = RadioMapExtractor.extract(
             self._result, metric=str(self.metric), tx_index=int(self.tx_index),
-            bounds=self._bounds, log_scale=bool(self.log_scale))
+            bounds=self._bounds, log_scale=bool(self.log_scale),
+            vmin=None if auto else float(num(self.range_min)),
+            vmax=None if auto else float(num(self.range_max)))
         self.result_figure.clear().imshow(img.data).title(img.label)
         if bool(self.send_to_results):
             FieldViz.show_2d(img.data, bounds=((img.extent[0], img.extent[1]),
