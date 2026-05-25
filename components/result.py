@@ -44,8 +44,9 @@ class ChannelResultComponent(Component):
     _bounds = None   # tangential extent [min0, max0, min1, max1] of the solved grid
 
     # --- solver selection + endpoints ---
-    solver = string_field("deterministic", options=["deterministic", "montecarlo"],
-                          enum_toggle=True, title="Solve")
+    solver = string_field("montecarlo", options=["deterministic", "montecarlo"],
+                          enum_toggle=True, title="Solve",
+                          description="Monte Carlo is the robust default; deterministic needs its OptiX pipeline to compile.")
     transmitter = string_field("tx", description="Transmitter endpoint name.")
     receiver_grid = string_field("rmap", description="ReceiverGrid endpoint name.")
 
@@ -127,12 +128,20 @@ class ChannelResultComponent(Component):
     @button(display_name="Solve")
     def solve(self):
         scene = self._owner.scene
+        tx_obj = scene.get_object_by_name(str(self.transmitter))
+        if tx_obj is None or tx_obj.get_component("ChannelTransmitter") is None:
+            Notifications.error("Channel", f"Transmitter '{self.transmitter}' not found")
+            return "Transmitter not found"
         grid_obj = scene.get_object_by_name(str(self.receiver_grid))
         if grid_obj is None or grid_obj.get_component("ReceiverGrid") is None:
             Notifications.error("Channel", f"ReceiverGrid '{self.receiver_grid}' not found")
             return "ReceiverGrid not found"
         self._bounds = vec(grid_obj.get_component("ReceiverGrid").bounds)
-        self._result = SolveRunner.run(scene, self)
+        try:
+            self._result = SolveRunner.run(scene, self)
+        except Exception as exc:  # noqa: BLE001 - GPU solver boundary: notify, don't crash the button
+            Notifications.error("Channel", f"{self.solver} solve failed: {exc}")
+            return f"Solve failed: {exc}"
         self.update_map()
         Notifications.success("Channel", f"{str(self.solver)} radiomap solved")
         return "Solve complete"

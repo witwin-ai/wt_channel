@@ -85,10 +85,15 @@ def _array_object(name, array):
 # --- library factories (context.scene gets the extras; return the primary obj) ---
 
 def _make_demo(ctx):
-    """Solvable radiomap demo: Settings (returned) + Transmitter + ReceiverGrid + ground."""
+    """Solvable radiomap demo: Settings (returned) + Tx + ReceiverGrid + a point Rx + ground.
+
+    The point Receiver ("rx") is the target for the Channel Settings' PathSolve button;
+    the ReceiverGrid ("rmap") is the radiomap target for ChannelResult.
+    """
     settings = _settings_object(ctx.name)
     ctx.scene.add_object(_ground_object())
     ctx.scene.add_object(_tx_object())
+    ctx.scene.add_object(_rx_object())
     ctx.scene.add_object(_grid_object())
     return settings
 

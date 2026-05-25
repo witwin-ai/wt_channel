@@ -21,7 +21,10 @@ def build_scene() -> Any:
                       Material.from_itu("brick"), name="wall"),
         ],
         transmitters=[ch.Transmitter(name="tx", position=(-5.0, 0.0, 3.0), power=1.0)],
-        receivers=[ch.ReceiverGrid(name="rmap", axis="z", position=1.5,
-                                   bounds=((-12.0, 12.0), (-12.0, 12.0)), grid_shape=(96, 96))],
+        receivers=[
+            ch.Receiver(name="rx", position=(8.0, 0.0, 1.5)),  # point Rx for the path solve
+            ch.ReceiverGrid(name="rmap", axis="z", position=1.5,
+                            bounds=((-12.0, 12.0), (-12.0, 12.0)), grid_shape=(96, 96)),
+        ],
         frequency=3.5e9, device="cuda",
     )

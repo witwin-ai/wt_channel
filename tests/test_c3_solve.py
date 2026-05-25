@@ -179,8 +179,15 @@ def test_demo_prefab_roundtrips(adapter, wtc):
     platform = adapter.to_platform(studio)
     assert {s.name for s in platform.structures} == {"ground"}
     assert {t.name for t in platform.transmitters} == {"tx"}
-    assert {r.name for r in platform.receivers} == {"rmap"}
+    assert {r.name for r in platform.receivers} == {"rmap", "rx"}  # grid + point Rx for path solve
     assert platform.structures[0].material.itu_descriptor == ("concrete", None)
+
+
+def test_default_solver_is_montecarlo():
+    # Deterministic needs its OptiX pipeline to compile; MC is the robust default.
+    from wt_channel.components.result import ChannelResultComponent
+
+    assert str(ChannelResultComponent().solver) == "montecarlo"
 
 
 # --- live solve (CUDA) ---------------------------------------------------------

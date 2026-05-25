@@ -55,7 +55,23 @@ class PathSolveComponent(Component):
 
     @button(display_name="Solve Paths")
     def solve(self):
-        self._result = PathSolveRunner.run(self._owner.scene, self)
+        scene = self._owner.scene
+        tx_obj = scene.get_object_by_name(str(self.transmitter))
+        if tx_obj is None or tx_obj.get_component("ChannelTransmitter") is None:
+            Notifications.error("Channel", f"Transmitter '{self.transmitter}' not found")
+            return "Transmitter not found"
+        rx_obj = scene.get_object_by_name(str(self.receiver))
+        if rx_obj is None or rx_obj.get_component("ChannelReceiver") is None:
+            Notifications.error(
+                "Channel",
+                f"Point Receiver '{self.receiver}' not found "
+                "(path solve needs a Receiver, not a ReceiverGrid)")
+            return "Receiver not found"
+        try:
+            self._result = PathSolveRunner.run(scene, self)
+        except Exception as exc:  # noqa: BLE001 - GPU solver boundary: notify, don't crash the button
+            Notifications.error("Channel", f"path solve failed: {exc}")
+            return f"Path solve failed: {exc}"
         self.update_plot()
         if bool(self.draw_paths):
             self.draw()
