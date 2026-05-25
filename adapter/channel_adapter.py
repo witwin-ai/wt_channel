@@ -14,7 +14,15 @@ from typing import Any, List, Optional
 from witwin_server import Scene, SceneObject
 from witwin_server.platform_bridge import GeometryMap, StructureMap, TransformMap
 
+from .array_spec import ArraySpecMap
 from .common import num, vec
+from .endpoint_map import (
+    DEFAULT_ARRAY_COMPONENT,
+    GRID_COMPONENT,
+    RX_COMPONENT,
+    TX_COMPONENT,
+    EndpointMap,
+)
 from .material_map import ChannelMaterialMap
 from .settings_map import MARKER_COMPONENT, SettingsMap
 
@@ -41,6 +49,16 @@ class ChannelAdapter:
             obj = StructureMap.to_studio(structure)
             ChannelMaterialMap.overlay_studio(obj, structure.material)
             studio.add_object(obj)
+        for tx in scene.transmitters:
+            studio.add_object(EndpointMap.tx_to_studio(tx))
+        for rx in scene.receivers:
+            # ReceiverGrid carries an `axis`; a point Receiver does not.
+            builder = EndpointMap.grid_to_studio if hasattr(rx, "axis") else EndpointMap.rx_to_studio
+            studio.add_object(builder(rx))
+        if scene.tx_array is not None:
+            studio.add_object(EndpointMap.default_array_to_studio("tx", scene.tx_array))
+        if scene.rx_array is not None:
+            studio.add_object(EndpointMap.default_array_to_studio("rx", scene.rx_array))
         studio.end_batch()
         return studio
 
@@ -57,12 +75,28 @@ class ChannelAdapter:
                 "ChannelSettings component (scene frequency / device).")
         config = SettingsMap.build_config(settings_obj)
 
-        structures = [
-            self._structure_to_platform(ch, obj, config.frequency)
-            for obj in studio_scene.objects.values()
-            if obj is not settings_obj and obj.get_component("PlatformGeometry") is not None
-        ]
-        scene = ch.Scene(structures=structures, frequency=config.frequency, device=config.device)
+        structures: List[Any] = []
+        transmitters: List[Any] = []
+        receivers: List[Any] = []
+        tx_array = rx_array = None
+        for obj in studio_scene.objects.values():
+            if obj is settings_obj:
+                continue
+            if obj.get_component(TX_COMPONENT) is not None:
+                transmitters.append(EndpointMap.tx_to_platform(ch, obj))
+            elif obj.get_component(RX_COMPONENT) is not None or obj.get_component(GRID_COMPONENT) is not None:
+                receivers.append(EndpointMap.receiver_to_platform(ch, obj))
+            elif obj.get_component(DEFAULT_ARRAY_COMPONENT) is not None:
+                if str(obj.get_component(DEFAULT_ARRAY_COMPONENT).role) == "tx":
+                    tx_array = ArraySpecMap.from_object(ch, obj)
+                else:
+                    rx_array = ArraySpecMap.from_object(ch, obj)
+            elif obj.get_component("PlatformGeometry") is not None:
+                structures.append(self._structure_to_platform(ch, obj, config.frequency))
+
+        scene = ch.Scene(structures=structures, transmitters=transmitters, receivers=receivers,
+                         frequency=config.frequency, device=config.device,
+                         tx_array=tx_array, rx_array=rx_array)
         if config.noise_power is not None:
             scene.noise_power = config.noise_power
         return scene
