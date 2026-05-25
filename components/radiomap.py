@@ -52,20 +52,19 @@ class RadioMapComponent(FieldComponent):
 
     _result = None   # runtime RadioMapResult (never serialized)
 
-    # --- lock the inherited Field to a 2D solvable grid ---
+    # --- lock the inherited Field to a 2D XZ-plane solvable grid ---
     dimension = string_field("2D", options=["2D", "3D"], hidden=True)
-    plane = string_field("XY", options=["XY", "XZ", "YZ"], enum_toggle=True, group="Settings",
-                         description="Radiomap plane orientation.")
+    plane = string_field("XZ", options=["XY", "XZ", "YZ"], hidden=True)  # locked horizontal (Y up)
     render_mode = string_field("Slices", options=["None", "Slices", "Volume", "SDF", "Vector"],
                                hidden=True)
     frequency_dependent_resolution = bool_field(False, hidden=True)
     frequency = float_field(3.5e9, min=1e3, max=300e9, step=0.1, units=FREQUENCY_UNITS,
                             default_unit="GHz", group="Settings",
                             description="Scene carrier frequency (also re-evaluates ITU materials).")
-    # A flat 20 m square on the local plane (Field's default is a 3D box).
-    min_bound = vector3_field([-10.0, -10.0, 0.0], group="Settings", description="Min corner (local).")
-    max_bound = vector3_field([10.0, 10.0, 0.0], group="Settings", description="Max corner (local).")
-    resolution = vector3_field([64.0, 64.0, 1.0], group="Settings",
+    # A flat 20 m square on the horizontal XZ plane (Y is the normal/up axis).
+    min_bound = vector3_field([-10.0, 0.0, -10.0], group="Settings", description="Min corner (local).")
+    max_bound = vector3_field([10.0, 0.0, 10.0], group="Settings", description="Max corner (local).")
+    resolution = vector3_field([64.0, 1.0, 64.0], group="Settings",
                                description="Grid resolution per axis (tangential axes used).")
 
     # --- scene config (frequency is the inherited Field field) ---
@@ -151,11 +150,17 @@ class RadioMapComponent(FieldComponent):
 
     @button(display_name="Solve", group=_SCENE)
     def solve(self):
+        from ..adapter.channel_adapter import ChannelAdapter
+
         scene = self._owner.scene
         transmitter = self._resolve_transmitter(scene)
         if transmitter is None:
             Notifications.error("Channel", "No transmitter found (add a Tx, or set its name).")
             return "Transmitter not found"
+        if not ChannelAdapter.has_structures(scene):
+            Notifications.error("Channel", "Radiomap solve needs at least one structure/mesh "
+                                "(e.g. a ground plane or building). Add geometry to the scene.")
+            return "No structures in scene"
         try:
             self._result = SolveRunner.run(scene, self, transmitter=transmitter,
                                            receiver=self._owner.name)

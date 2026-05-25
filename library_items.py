@@ -60,7 +60,7 @@ def _ground_object():
     from .adapter.material_map import ChannelMaterialMap
 
     obj = StructureMap.to_studio(Structure(
-        Box(size=(20.0, 20.0, 0.2), position=(0.0, 0.0, 0.0)),
+        Box(size=(20.0, 0.2, 20.0), position=(0.0, 0.0, 0.0)),  # horizontal slab (Y up)
         Material.from_itu("concrete"), name="Channel Ground"))
     ChannelMaterialMap.overlay_studio(obj, Material.from_itu("concrete"))
     return obj
@@ -71,18 +71,18 @@ def _ground_object():
 def _make_demo(ctx):
     """Solvable demo: ground + Tx + Rx + Path Solver (extras) and a RadioMap (returned)."""
     ctx.scene.add_object(_ground_object())
-    ctx.scene.add_object(_tx_object("Tx", (-5.0, 0.0, 3.0)))
-    ctx.scene.add_object(_rx_object("Rx", (8.0, 0.0, 1.5)))
+    ctx.scene.add_object(_tx_object("Tx", (-5.0, 3.0, 0.0)))   # Y is up/height
+    ctx.scene.add_object(_rx_object("Rx", (8.0, 1.5, 0.0)))
     ctx.scene.add_object(_pathsolver_object("Path Solver"))
     return _radiomap_object("RadioMap")
 
 
 def _make_tx(ctx):
-    return _tx_object(ctx.name, (0.0, 0.0, 2.0))
+    return _tx_object(ctx.name, (0.0, 2.0, 0.0))
 
 
 def _make_rx(ctx):
-    return _rx_object(ctx.name, (5.0, 0.0, 1.5))
+    return _rx_object(ctx.name, (5.0, 1.5, 0.0))
 
 
 def _make_radiomap(ctx):

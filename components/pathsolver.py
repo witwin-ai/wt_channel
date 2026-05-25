@@ -66,6 +66,8 @@ class PathSolverComponent(Component):
 
     @button(display_name="Solve Paths")
     def solve(self):
+        from ..adapter.channel_adapter import ChannelAdapter
+
         scene = self._owner.scene
         transmitter = self._resolve(scene, self.transmitter, TX_COMPONENT)
         if transmitter is None:
@@ -75,6 +77,10 @@ class PathSolverComponent(Component):
         if receiver is None:
             Notifications.error("Channel", "No point Receiver found (add an Rx, or set its name).")
             return "Receiver not found"
+        if not ChannelAdapter.has_structures(scene):
+            Notifications.error("Channel", "Path solve needs at least one structure/mesh "
+                                "(e.g. a ground plane or building). Add geometry to the scene.")
+            return "No structures in scene"
         try:
             self._result = PathSolveRunner.run(scene, self, transmitter=transmitter,
                                                receiver=receiver)

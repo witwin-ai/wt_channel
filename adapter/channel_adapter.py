@@ -90,6 +90,8 @@ class ChannelAdapter:
                 receivers.append(EndpointMap.radiomap_to_platform(ch, obj))
             elif obj.get_component("PlatformGeometry") is not None:
                 structures.append(self._structure_to_platform(ch, obj, frequency))
+            elif self._is_plain_mesh(obj):
+                structures.append(self._mesh_to_platform(ch, obj, frequency))
 
         scene = ch.Scene(structures=structures, transmitters=transmitters, receivers=receivers,
                          frequency=frequency, device=device)
@@ -97,7 +99,50 @@ class ChannelAdapter:
             scene.noise_power = noise_power
         return scene
 
+    @staticmethod
+    def has_structures(studio_scene: Scene) -> bool:
+        """True if the scene has any geometry the solver can ray-trace against.
+
+        A channel solve needs at least one structure mesh (the platform raises
+        "active RayD runtime scene" otherwise). Counts both channel/platform structures
+        (``PlatformGeometry``) and plain studio meshes (used as default-material walls).
+        """
+        for obj in studio_scene.objects.values():
+            if obj.get_component("PlatformGeometry") is not None or ChannelAdapter._is_plain_mesh(obj):
+                return True
+        return False
+
     # --- helpers -------------------------------------------------------------
+
+    @staticmethod
+    def _is_plain_mesh(obj: SceneObject) -> bool:
+        # A regular studio mesh (no PlatformGeometry) usable as a default-material structure.
+        if obj.get_component("PlatformGeometry") is not None:
+            return False
+        mesh = obj.get_component("Mesh")
+        return mesh is not None and not mesh.is_empty
+
+    @classmethod
+    def _mesh_to_platform(cls, ch: Any, obj: SceneObject, scene_frequency: Optional[float]) -> Any:
+        # Build a structure from a plain studio mesh + its Transform (default EM material).
+        import witwin.core as wc
+
+        mesh = obj.get_component("Mesh")
+        transform = obj.get_component("Transform")
+        verts = mesh.get_vertices_numpy().reshape(-1, 3)
+        faces = mesh.get_faces_numpy().reshape(-1, 3)
+        geometry = wc.Mesh(verts, faces, position=vec(transform.position),
+                           rotation=TransformMap.euler_to_quat(transform.rotation),
+                           scale=1.0, recenter=False)
+        return ch.Structure(geometry, cls._mesh_material(ch, obj, scene_frequency), name=obj.name)
+
+    @staticmethod
+    def _mesh_material(ch: Any, obj: SceneObject, scene_frequency: Optional[float]) -> Any:
+        # Plain meshes default to ITU concrete so every triangle has an assigned material;
+        # an explicit EMMaterial / MaterialPreset on the object still wins.
+        if obj.get_component("MaterialPreset") is not None or obj.get_component("EMMaterial") is not None:
+            return ChannelMaterialMap.to_platform(ch, obj, scene_frequency)
+        return ch.Material.from_itu("concrete")
 
     @classmethod
     def _discover_config(cls, studio_scene: Scene) -> Tuple[Optional[float], str, Optional[float]]:
