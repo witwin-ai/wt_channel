@@ -7,9 +7,19 @@ field).
 
 Built on the frozen core base layer (`witwin_server.platform_bridge`): geometry,
 transform, scalar material, and structure metadata are shared; this plugin adds the
-channel-specific surface — scene config, ITU material presets, endpoints (Tx / Rx /
-ReceiverGrid), antenna arrays (custom / ULA / UPA), the two solver families, and the
-radiomap result component.
+channel-specific surface as **four core components**:
+
+- **Tx** / **Rx** — transmitter / point receiver endpoints; the antenna (pattern +
+  single / ULA / UPA / custom array + polarization) is defined inline on each.
+- **RadioMap** — a 2D field that *is* its own receiver grid + scene config
+  (frequency / device / noise) + solver config (deterministic + Monte Carlo) + **Solve**
+  button + 2D result viewer; it auto-finds the transmitter.
+- **PathSolver** — point-to-point path solve (CIR / CFR / taps + viewport rays); carries
+  its own scene config and auto-finds the Tx/Rx.
+
+Plus a `MaterialPreset` companion for ITU structure materials. There is no separate
+scene-config object: frequency / device / noise ride the RadioMap (preferred) and
+PathSolver, and are discovered from them on export.
 
 ## Layout
 
@@ -17,9 +27,9 @@ radiomap result component.
 wt_channel/
   witwin.manifest.json   plugin manifest (id witwin.channel; engines/contributes)
   __init__.py            registers components + the "channel" adapter
-  components/            ChannelSettings, MaterialPreset, endpoints, result
-  adapter/               ChannelAdapter + settings/material/endpoint maps + solve
-  library_items.py       drag-in "Channel Scene" starter + endpoint / array items
+  components/            endpoints (Tx/Rx), radiomap, pathsolver, materials
+  adapter/               ChannelAdapter + material/endpoint/array maps + solve/path
+  library_items.py       drag-in Channel Scene (Demo) + Tx / Rx / RadioMap / Path Solver
   examples/              demo_scene factory (for live load verification)
   tests/                 per-phase round-trip suites (CPU) + live-solve gate (CUDA)
 ```

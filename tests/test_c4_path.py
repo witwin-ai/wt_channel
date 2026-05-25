@@ -116,8 +116,9 @@ def test_live_path_solve(adapter, path_ready):
     import witwin.channel as ch
     from wt_channel.adapter.path_solve import PathLineBuilder, PathSolveRunner
 
+    # Keep the wall in the scene while leaving the Tx/Rx center line visible.
     scene = ch.Scene(
-        structures=[Structure(Box(size=(0.3, 6.0, 6.0), position=(3.0, 0.0, 3.0)),
+        structures=[Structure(Box(size=(0.3, 6.0, 6.0), position=(3.0, 4.0, 3.0)),
                               Material.from_itu("concrete"), name="wall")],
         transmitters=[ch.Transmitter(name="tx", position=(0.0, 0.0, 3.0))],
         receivers=[ch.Receiver(name="rx", position=(6.0, 0.0, 3.0))],
@@ -129,4 +130,5 @@ def test_live_path_solve(adapter, path_ready):
     result = PathSolveRunner.run(studio, comp, transmitter="tx", receiver="rx")
     assert result.vertices is not None
     lines = PathLineBuilder.build(result)
-    assert len(lines) >= 1   # at least the LoS path
+    assert len(lines) >= 1
+    assert any(line.interaction == "los" for line in lines)

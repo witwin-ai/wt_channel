@@ -10,7 +10,9 @@ pip-installed; the server adds the same directory at startup). If the base/solve
 deps are not importable, the whole suite is skipped rather than erroring.
 
 Round-trip suites run on CPU with native-python tuples (``device='cpu'``). The live
-solve suite (C3) needs CUDA RayD/OptiX and is gated by the ``solver_ready`` fixture.
+solve suites need CUDA RayD/OptiX and are gated per-solver by the ``det_ready`` /
+``mc_ready`` / ``path_ready`` fixtures (each probes its own solver and skips only if
+*that* one can't run here).
 """
 import importlib
 import sys
