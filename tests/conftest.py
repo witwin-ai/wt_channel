@@ -56,24 +56,64 @@ def device():
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-@pytest.fixture(scope="session")
-def solver_ready(device):
-    """Skip the live-solve suite if the channel solver can't run a tiny radiomap here."""
-    if device != "cuda":
-        pytest.skip("channel solve requires CUDA RayD/OptiX; round-trip tests run on CPU.")
+def _tiny_radiomap_scene():
+    # A small radiomap scene for probing whether a solver can run here.
     import witwin.channel as ch
     from witwin.core import Box, Material, Structure
+    return ch.Scene(
+        structures=[Structure(Box(size=(8.0, 8.0, 0.1), position=(0.0, 0.0, 0.0)),
+                              Material.from_itu("concrete"), name="ground")],
+        transmitters=[ch.Transmitter(name="tx", position=(0.0, 0.0, 3.0))],
+        receivers=[ch.ReceiverGrid(name="rmap", axis="z", position=1.5,
+                                   bounds=((-4.0, 4.0), (-4.0, 4.0)), grid_shape=(8, 8))],
+        frequency=3.5e9, device="cuda",
+    )
+
+
+@pytest.fixture(scope="session")
+def cuda(device):
+    """Skip live-solve tests when CUDA is unavailable (round-trip tests run on CPU)."""
+    if device != "cuda":
+        pytest.skip("channel solve requires CUDA RayD/OptiX.")
+    return True
+
+
+@pytest.fixture(scope="session")
+def det_ready(cuda):
+    """Gate the deterministic live solve on its OptiX pipeline compiling here."""
+    import witwin.channel as ch
     try:
-        scene = ch.Scene(
-            structures=[Structure(Box(size=(4.0, 4.0, 0.1), position=(0.0, 0.0, 0.0)),
-                                  Material.from_itu("concrete", 3.5e9), name="ground")],
-            transmitters=[ch.Transmitter(name="tx", position=(0.0, 0.0, 2.0))],
-            receivers=[ch.ReceiverGrid(name="rmap", axis="z", position=1.5,
-                                       bounds=((-3.0, 3.0), (-3.0, 3.0)), grid_shape=(8, 8))],
-            frequency=3.5e9, device="cuda",
-        )
-        ch.deterministic.solve(scene=scene, transmitter=scene.transmitter("tx"),
-                               receiver=scene.receiver("rmap"))
-    except Exception as exc:  # noqa: BLE001 - test gate: needs-user-verification if solver absent
-        pytest.skip(f"channel solver unavailable in this environment: {exc}")
+        ch.deterministic.solve(scene=_tiny_radiomap_scene(), transmitter="tx", receiver="rmap")
+    except Exception as exc:  # noqa: BLE001 - test gate: needs-user-verification if it can't run
+        pytest.skip(f"deterministic solver unavailable in this environment: {exc}")
+    return True
+
+
+@pytest.fixture(scope="session")
+def mc_ready(cuda):
+    """Gate the Monte Carlo live solve on its solver running here."""
+    import witwin.channel as ch
+    try:
+        ch.montecarlo.solve(scene=_tiny_radiomap_scene(), transmitter="tx", receiver="rmap")
+    except Exception as exc:  # noqa: BLE001 - test gate: needs-user-verification if it can't run
+        pytest.skip(f"montecarlo solver unavailable in this environment: {exc}")
+    return True
+
+
+@pytest.fixture(scope="session")
+def path_ready(cuda):
+    """Gate the point-to-point path live solve on its solver running here."""
+    import witwin.channel as ch
+    from witwin.core import Box, Material, Structure
+    scene = ch.Scene(
+        structures=[Structure(Box(size=(0.3, 4.0, 4.0), position=(2.0, 0.0, 2.0)),
+                              Material.from_itu("concrete"), name="wall")],
+        transmitters=[ch.Transmitter(name="tx", position=(0.0, 0.0, 2.0))],
+        receivers=[ch.Receiver(name="rx", position=(4.0, 0.0, 2.0))],
+        frequency=3.5e9, device="cuda",
+    )
+    try:
+        ch.path.solve(scene=scene, transmitter="tx", receiver="rx")
+    except Exception as exc:  # noqa: BLE001 - test gate: needs-user-verification if it can't run
+        pytest.skip(f"path solver unavailable in this environment: {exc}")
     return True

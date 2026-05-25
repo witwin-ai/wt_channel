@@ -111,7 +111,7 @@ def test_path_config_builder():
 
 # --- live path solve (CUDA) ----------------------------------------------------
 
-def test_live_path_solve(adapter, solver_ready):
+def test_live_path_solve(adapter, path_ready):
     """Round-trip then path-solve a discrete Tx<->Rx link; check geometry + CIR."""
     import witwin.channel as ch
     from wt_channel.adapter.path_solve import PathLineBuilder, PathSolveRunner

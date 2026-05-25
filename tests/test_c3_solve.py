@@ -168,22 +168,33 @@ def _live_scene():
     )
 
 
-def test_live_both_solvers_match_direct(adapter, solver_ready):
-    """Round-trip then solve both families; assert each map matches a direct run."""
-    import witwin.channel as ch
+def _run_live(adapter, solver):
+    # Round-trip then solve via the adapter; return the (ny,nx) path-gain map.
     from wt_channel.adapter.solve import RadioMapExtractor, SolveRunner
 
     studio = adapter.to_studio(_live_scene())
     comp = studio.get_object_by_name("Channel Settings").get_component("ChannelResult")
-    comp.transmitter, comp.receiver_grid = "tx", "rmap"
+    comp.solver, comp.transmitter, comp.receiver_grid = solver, "tx", "rmap"
     comp.det_num_samples = comp.mc_num_samples = 2000
+    result = SolveRunner.run(studio, comp)
+    return result, RadioMapExtractor._to_numpy(result.squeeze_tx(0).path_gain)
 
-    for solver, direct in (("deterministic", ch.deterministic.solve),
-                           ("montecarlo", ch.montecarlo.solve)):
-        comp.solver = solver
-        result = SolveRunner.run(studio, comp)
-        ref = direct(scene=_live_scene(), transmitter="tx", receiver="rmap")
-        assert tuple(result.grid_shape) == tuple(ref.grid_shape) == (16, 16)
-        got = RadioMapExtractor._to_numpy(result.squeeze_tx(0).path_gain)
-        assert got.shape == (16, 16)
-        assert np.isfinite(got).any()
+
+def test_live_deterministic_matches_direct(adapter, det_ready):
+    """Round-trip then deterministic solve; assert the map matches a direct run's shape."""
+    import witwin.channel as ch
+
+    result, got = _run_live(adapter, "deterministic")
+    ref = ch.deterministic.solve(scene=_live_scene(), transmitter="tx", receiver="rmap")
+    assert tuple(result.grid_shape) == tuple(ref.grid_shape) == (16, 16)
+    assert got.shape == (16, 16) and np.isfinite(got).any()
+
+
+def test_live_montecarlo_matches_direct(adapter, mc_ready):
+    """Round-trip then Monte Carlo solve; assert the map matches a direct run's shape."""
+    import witwin.channel as ch
+
+    result, got = _run_live(adapter, "montecarlo")
+    ref = ch.montecarlo.solve(scene=_live_scene(), transmitter="tx", receiver="rmap")
+    assert tuple(result.grid_shape) == tuple(ref.grid_shape) == (16, 16)
+    assert got.shape == (16, 16) and np.isfinite(got).any()

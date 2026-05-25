@@ -1,23 +1,28 @@
 # wt-channel — follow-ups (Phase C5) & verification notes
 
-## Needs user verification (environment-blocked)
+## Live-solve verification status (CUDA, conda `witwin2`)
 
-Round-trip + config building are fully tested on CPU (35 passing tests). The **live
-GPU solves** are written but **skipped** in the dev environment and must be confirmed
-on a working CUDA RayD/OptiX setup:
+Round-trip + config building are fully tested on CPU. The live GPU solves are gated
+per-solver (each probes its own solver and skips only if *that* one can't run here):
 
-- `tests/test_c3_solve.py::test_live_both_solvers_match_direct` — deterministic +
-  Monte Carlo radiomaps via the adapter vs a direct platform run.
-- `tests/test_c4_path.py::test_live_path_solve` — point-to-point path solve + ray
-  poly-line construction.
+- **Monte Carlo radiomap — VERIFIED LIVE.** `test_c3_solve.py::
+  test_live_montecarlo_matches_direct` runs end-to-end through the adapter
+  (`to_studio` -> `SolveRunner` -> `RadioMapExtractor`) and matches a direct
+  `montecarlo.solve`; it PASSES in `witwin2`.
+- **Deterministic radiomap + point-to-point path solve — environment-blocked.**
+  `test_c3_solve.py::test_live_deterministic_matches_direct` and
+  `test_c4_path.py::test_live_path_solve` are SKIPPED: both use the platform's
+  deterministic-family OptiX pipeline ("multipath"), which **fails to compile** in
+  `witwin2` (`optixPipelineCreate(multipath)` COMPILE ERROR) — a *direct*
+  `deterministic.solve` / `path.solve` fails identically (mostly reproducible; one
+  rare path success observed), so it is an OptiX/driver issue, not a plugin bug. Monte
+  Carlo uses a different pipeline and is unaffected. Re-run on a setup where the
+  multipath pipeline compiles to confirm deterministic radiomaps, path CIR/CFR/taps,
+  and the viewport ray poly-lines.
 
-In conda env `witwin2` (CUDA present) the OptiX pipeline fails to compile
-(`optixPipelineCreate` COMPILE ERROR), which also breaks a *direct*
-`witwin.channel.deterministic.solve` / `path.solve` — i.e. it is an OptiX/driver
-environment issue, not a plugin bug. The `solver_ready` fixture skips rather than
-faking a pass. Also unverified (no running server this session): the live editor load
-via `load_platform_scene` with factory `wt_channel.examples.demo_scene:build_scene`,
-and the actual viewport rendering of the radiomap textured plane / ray poly-lines.
+Also unverified (no running server this session): the live editor load via
+`load_platform_scene` with factory `wt_channel.examples.demo_scene:build_scene`, and
+the actual viewport rendering of the radiomap textured plane / ray poly-lines.
 
 ## Requested base-layer change (do NOT make from this plugin)
 
