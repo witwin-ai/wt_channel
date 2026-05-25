@@ -81,22 +81,48 @@ class PathSolverComponent(Component):
             Notifications.error("Channel", "Path solve needs at least one structure/mesh "
                                 "(e.g. a ground plane or building). Add geometry to the scene.")
             return "No structures in scene"
+        # Run + plot + draw share one boundary so any failure surfaces as a toast (the
+        # button dispatcher otherwise logs uncaught errors to the Console only).
         try:
             self._result = PathSolveRunner.run(scene, self, transmitter=transmitter,
                                                receiver=receiver)
-        except Exception as exc:  # noqa: BLE001 - GPU solver boundary: notify, don't crash the button
+            self._plot()
+            drawn = self._draw(scene) if bool(self.draw_paths) else 0
+        except Exception as exc:  # noqa: BLE001 - GPU/render boundary: surface, don't swallow
             Notifications.error("Channel", f"path solve failed: {exc}")
             return f"Path solve failed: {exc}"
-        self.update_plot()
-        if bool(self.draw_paths):
-            self.draw()
-        Notifications.success("Channel", "Path solve complete")
-        return "Path solve complete"
+        Notifications.success("Channel", f"Path solve {transmitter} -> {receiver}: {drawn} paths")
+        return f"Path solve complete ({drawn} paths)"
 
     @button(display_name="Update Plot")
     def update_plot(self):
         if self._result is None:
+            Notifications.warning("Channel", "Solve paths first.")
             return "Solve first"
+        try:
+            self._plot()
+        except Exception as exc:  # noqa: BLE001 - surface as a toast
+            Notifications.error("Channel", f"plot failed: {exc}")
+            return f"Plot failed: {exc}"
+        Notifications.success("Channel", f"{self.plot_mode} plot updated")
+        return "Plot updated"
+
+    @button(display_name="Draw Paths")
+    def draw(self):
+        if self._result is None:
+            Notifications.warning("Channel", "Solve paths first.")
+            return "Solve first"
+        try:
+            drawn = self._draw(self._owner.scene)
+        except Exception as exc:  # noqa: BLE001 - surface as a toast
+            Notifications.error("Channel", f"draw failed: {exc}")
+            return f"Draw failed: {exc}"
+        Notifications.success("Channel", f"Drew {drawn} ray paths")
+        return f"Drew {drawn} paths"
+
+    # --- internals (no notifications; shared by the buttons + solve) ----------
+
+    def _plot(self):
         mode = str(self.plot_mode)
         if mode == "cfr":
             data = PathPlots.cfr(self._result)
@@ -108,13 +134,8 @@ class PathSolverComponent(Component):
         fig = self.path_figure.clear()
         (fig.stem if data.kind == "stem" else fig.line)(list(data.x), list(data.y))
         fig.title(data.title)
-        return "Plot updated"
 
-    @button(display_name="Draw Paths")
-    def draw(self):
-        if self._result is None:
-            return "Solve first"
-        scene = self._owner.scene
+    def _draw(self, scene) -> int:
         self._clear_paths(scene)
         ids = []
         for i, line in enumerate(PathLineBuilder.build(self._result)):
@@ -124,7 +145,7 @@ class PathSolverComponent(Component):
             api.viewport.set_render_spec(obj.id, spec.to_dict())
             ids.append(obj.id)
         self._path_ids = ids
-        return f"Drew {len(ids)} paths"
+        return len(ids)
 
     def _clear_paths(self, scene):
         # Remove the ray-path objects from a previous solve so they don't pile up.
