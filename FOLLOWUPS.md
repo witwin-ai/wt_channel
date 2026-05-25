@@ -44,6 +44,16 @@ gone; scene-default `tx_array`/`rx_array` are baked into each endpoint on import
 old `ChannelSettings` object is removed — scene config rides RadioMap (preferred) and
 PathSolver, discovered on export. `ReceiverGrid` + `ChannelResult` folded into RadioMap.
 
+**RadioMap subclasses the core `Field` component** so it inherits the editor's field
+surface: the viewport border/handle gizmo (`FieldGizmo`, matched by `min_bound`/
+`max_bound`) and the 2D plane visualizer (`FieldVisualizer`, matched by
+`inheritsFrom('Field')` via the backend `base_classes`). The Field region is the receiver
+grid in the object's local frame (so the grid follows the Transform), and `Solve` writes
+the solved metric into the field's plane data (`set_volume_data` -> `volume_id`,
+`render_mode=Slices`) so the radiomap renders as the colored plane. Tx/Rx draw their own
+marker gizmos via `on_draw_gizmos`. The exact plane orientation / colormap mapping is
+wired to Field conventions but has not been visually verified in a running viewport.
+
 ## Deferred polish
 
 - **Per-mechanism component-map layers** — `RadioMapResult.components`
@@ -51,8 +61,9 @@ PathSolver, discovered on export. `ReceiverGrid` + `ChannelResult` folded into R
 - **Best-Tx association map** — multi-Tx `cell_association` / `tx_association_map`
   view + a multi-Tx transmitter list on `RadioMap` (currently a single Tx, blank =
   auto-find; the platform `solve` already accepts a Tx list).
-- **Viewport plane overlay** — the 2D radiomap as a textured plane aligned to the
-  RadioMap grid bounds (master §7.1), in addition to the Results-panel / figure.
+- **Viewport plane orientation pass** — the radiomap renders as the Field plane now;
+  the data->plane axis orientation + colormap/display-range mapping still needs a live
+  viewport check (and possibly a transpose) to confirm it matches the solved geometry.
 - **Sionna / Mitsuba interop** — pass-through of `Scene.from_sionna` /
   `Scene.load_mitsuba` / `to_sionna`.
 - **Grid receiver polarization / array** — the RadioMap grid currently uses the default

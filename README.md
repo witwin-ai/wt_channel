@@ -10,10 +10,16 @@ transform, scalar material, and structure metadata are shared; this plugin adds 
 channel-specific surface as **four core components**:
 
 - **Tx** / **Rx** — transmitter / point receiver endpoints; the antenna (pattern +
-  single / ULA / UPA / custom array + polarization) is defined inline on each.
-- **RadioMap** — a 2D field that *is* its own receiver grid + scene config
-  (frequency / device / noise) + solver config (deterministic + Monte Carlo) + **Solve**
-  button + 2D result viewer; it auto-finds the transmitter.
+  single / ULA / UPA / custom array + polarization) is defined inline on each. Each draws
+  a viewport marker gizmo (green Tx, red Rx).
+- **RadioMap** — **subclasses the core ``Field`` component** (2D), so it inherits the
+  viewport border/handle gizmo and the 2D plane visualizer for free. It adds the scene
+  config (device / noise; frequency is the Field field), the solver config (deterministic
+  + Monte Carlo) and a **Solve** button, auto-finds the transmitter, and writes the solved
+  metric back into the field's plane data — the radiomap shows as the colored 2D plane
+  inside its border. The Field region (``min_bound`` / ``max_bound`` / ``plane`` /
+  ``resolution``) is the receiver grid, in the object's local frame (grid follows the
+  Transform).
 - **PathSolver** — point-to-point path solve (CIR / CFR / taps + viewport rays); carries
   its own scene config and auto-finds the Tx/Rx.
 

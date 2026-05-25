@@ -53,14 +53,16 @@ def test_receiver_grid_grid_shape_roundtrip(adapter):
     assert rebuilt.cell_size is None
 
 
-def test_receiver_grid_cell_size_roundtrip(adapter):
+def test_receiver_grid_cell_size_resolves_to_counts(adapter):
     import witwin.channel as ch
+    # The RadioMap (Field) stores grid resolution as counts, so a cell_size grid
+    # round-trips as the equivalent grid_shape (extent / cell_size).
     grid = ch.ReceiverGrid(name="rm", axis="x", position=0.0, bounds=((-5, 5), (-5, 5)),
                            cell_size=(0.25, 0.5))
     rebuilt = RT.by_name(RT.back(adapter, _scene(receivers=[grid])).receivers)["rm"]
     assert rebuilt.axis == "x"
-    assert rebuilt.grid_shape is None
-    np.testing.assert_allclose(rebuilt.cell_size, (0.25, 0.5), atol=1e-4)
+    assert rebuilt.grid_shape == (40, 20)  # 10m / 0.25, 10m / 0.5
+    assert rebuilt.cell_size is None
 
 
 def test_ula_array_roundtrip(adapter):

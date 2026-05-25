@@ -8,6 +8,9 @@ a per-element ``pattern`` plus an ``array_kind`` (single element, ULA, UPA, or a
 element layout) and its polarization. ``array_kind="single"`` with ``pattern="iso"`` and
 ``array_polarization="v"`` means "no explicit array" (the solver's default element).
 
+Each endpoint draws a viewport gizmo (a colored marker at its position) via
+``on_draw_gizmos`` so it is visible even though the object itself is an Empty.
+
 The antenna fields are declared on both components (rather than a shared base) so each
 endpoint controls its own field ordering; the component metaclass collects fields from
 ``cls.__dict__`` only, so a plain mixin would be dropped. ``adapter.array_spec`` reads
@@ -15,6 +18,7 @@ these identically-named fields from either component.
 """
 from witwin_server.components import (
     Component,
+    GizmoContext,
     bool_field,
     component,
     float_field,
@@ -30,6 +34,8 @@ _ULA = {"field_name": "array_kind", "operator": "eq", "value": "ula"}
 _UPA = {"field_name": "array_kind", "operator": "eq", "value": "upa"}
 _CUSTOM = {"field_name": "array_kind", "operator": "eq", "value": "custom"}
 _POL_CUSTOM = {"field_name": "array_polarization", "operator": "eq", "value": "custom"}
+_TX_COLOR = "#22c55e"  # green = transmitter
+_RX_COLOR = "#ef4444"  # red = receiver
 
 
 @component(name="ChannelTx", display_name="Tx", category=CATEGORY)
@@ -75,6 +81,12 @@ class TxComponent(Component):
     pol_slots_imag = list_field(vector3_field(), default=[], group="Antenna", show_if=_POL_CUSTOM,
                                 description="Custom polarization slots (imaginary part; optional).")
 
+    def on_draw_gizmos(self, ctx: GizmoContext) -> None:
+        """A green marker + a forward arrow at the transmitter position."""
+        ctx.color = _TX_COLOR
+        ctx.draw_sphere(radius=0.15, wireframe=False)
+        ctx.draw_arrow(length=0.45, direction=(0, 0, 1))
+
 
 @component(name="ChannelRx", display_name="Rx", category=CATEGORY)
 class RxComponent(Component):
@@ -119,3 +131,9 @@ class RxComponent(Component):
                            show_if=_POL_CUSTOM, description="Custom polarization slots (real part).")
     pol_slots_imag = list_field(vector3_field(), default=[], group="Antenna", show_if=_POL_CUSTOM,
                                 description="Custom polarization slots (imaginary part; optional).")
+
+    def on_draw_gizmos(self, ctx: GizmoContext) -> None:
+        """A red marker + a ring at the receiver position."""
+        ctx.color = _RX_COLOR
+        ctx.draw_sphere(radius=0.15, wireframe=False)
+        ctx.draw_circle(radius=0.28, segments=20)

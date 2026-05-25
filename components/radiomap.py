@@ -1,38 +1,40 @@
-"""RadioMap — a 2D field that is its own receiver grid, solver, and result viewer.
+"""RadioMap — a 2D ``Field`` that also solves and displays a channel radiomap.
 
-A ``RadioMap`` object *is* the receiver grid: the ``Field`` group defines the sampling
-plane (axis + height + tangential bounds + resolution), and on export the object becomes
-a ``ReceiverGrid`` named after itself. It also carries the scene config (frequency /
-device / noise) and the full solver config (deterministic + Monte Carlo + edge policy),
-so pressing **Solve** rebuilds the platform scene, auto-finds the transmitter, runs the
-chosen solver against this grid, and shows the chosen metric as a 2D heatmap (and,
-optionally, in the versioned Results panel). A metric / dB / value-range change
-re-renders without re-solving. Live solve needs CUDA RayD/OptiX.
+``RadioMap`` **subclasses the core ``Field`` component**, so it inherits the editor's
+field surface for free: the viewport border / handle gizmo (``FieldGizmo``), the 2D
+plane visualizer (``FieldVisualizer``, matched via ``inheritsFrom('Field')``), and the
+region fields (``min_bound`` / ``max_bound`` / ``plane`` / ``resolution`` / ``colormap`` /
+``display_range``). On top of that it adds the scene config (device / noise — frequency
+is the inherited ``Field`` field), the solver config (deterministic + Monte Carlo + edge
+policy), and a **Solve** button. The region *is* the receiver grid (in the object's local
+frame, so the grid follows the Transform), and the solved metric is written back into the
+field's own plane data — the radiomap shows as the colored 2D plane inside its border.
+
+Live solve needs CUDA RayD/OptiX (the round-trip / config tests run on CPU).
 """
+import numpy as np
+
 from witwin_server import Notifications
 from witwin_server.components import (
-    Component,
     bool_field,
     button,
     component,
-    figure,
     float_field,
     int_field,
     string_field,
-    vector4_field,
+    vector3_field,
 )
+from witwin_server.components.field_region import FREQUENCY_UNITS, FieldComponent
 from witwin_server.platform_bridge import FieldViz
 
-from ..adapter.common import num, vec
+from ..adapter.common import num
 from ..adapter.solve import RadioMapExtractor, SolveRunner
 from .category import CATEGORY
 
 _DET = {"field_name": "solver", "operator": "eq", "value": "deterministic"}
 _MC = {"field_name": "solver", "operator": "eq", "value": "montecarlo"}
 _STRAT = {"field_name": "det_quadrature_mode", "operator": "eq", "value": "stratified_fixed_n"}
-_GRID_SHAPE = {"field_name": "grid_mode", "operator": "eq", "value": "grid_shape"}
-_CELL_SIZE = {"field_name": "grid_mode", "operator": "eq", "value": "cell_size"}
-_SCENE = "Scene"
+_SCENE = "Channel"
 _DET_TUNING = "Deterministic Tuning"
 _MC_INTEGRATOR = "Monte Carlo Integrator"
 _MC_FILTER = "Monte Carlo Filtering"
@@ -40,41 +42,51 @@ _MC_TUNING = "Monte Carlo Tuning"
 _EDGE = "Edge Policy"
 TX_COMPONENT = "ChannelTx"
 
+# plane -> (normal axis index, tangential0 index, tangential1 index).
+PLANE_AXES = {"XY": (2, 0, 1), "XZ": (1, 0, 2), "YZ": (0, 1, 2)}
+
 
 @component(name="RadioMap", display_name="RadioMap", category=CATEGORY)
-class RadioMapComponent(Component):
-    """2D radiomap: receiver grid + scene/solver config + solve + field visualization."""
+class RadioMapComponent(FieldComponent):
+    """A 2D ``Field`` that solves a channel radiomap and shows it as its plane."""
 
     _result = None   # runtime RadioMapResult (never serialized)
-    _bounds = None   # tangential extent [min0, max0, min1, max1] of the solved grid
 
-    # --- scene config ---
-    frequency = float_field(3.5e9, min=0.0, group=_SCENE,
-                            description="Scene carrier frequency in Hz (re-evaluates ITU materials).")
+    # --- lock the inherited Field to a 2D solvable grid ---
+    dimension = string_field("2D", options=["2D", "3D"], hidden=True)
+    plane = string_field("XY", options=["XY", "XZ", "YZ"], enum_toggle=True, group="Settings",
+                         description="Radiomap plane orientation.")
+    render_mode = string_field("Slices", options=["None", "Slices", "Volume", "SDF", "Vector"],
+                               hidden=True)
+    frequency_dependent_resolution = bool_field(False, hidden=True)
+    frequency = float_field(3.5e9, min=1e3, max=300e9, step=0.1, units=FREQUENCY_UNITS,
+                            default_unit="GHz", group="Settings",
+                            description="Scene carrier frequency (also re-evaluates ITU materials).")
+    # A flat 20 m square on the local plane (Field's default is a 3D box).
+    min_bound = vector3_field([-10.0, -10.0, 0.0], group="Settings", description="Min corner (local).")
+    max_bound = vector3_field([10.0, 10.0, 0.0], group="Settings", description="Max corner (local).")
+    resolution = vector3_field([64.0, 64.0, 1.0], group="Settings",
+                               description="Grid resolution per axis (tangential axes used).")
+
+    # --- scene config (frequency is the inherited Field field) ---
     device = string_field("cuda", options=["cuda", "cpu"], enum_toggle=True, group=_SCENE,
                           description="Solve device. Live solve needs CUDA RayD.")
-    use_noise_power = bool_field(False, group=_SCENE, title="Noise")
+    use_noise_power = bool_field(False, group=_SCENE, title="Channel")
     noise_power = float_field(1e-13, min=0.0, group=_SCENE, show_if="use_noise_power",
                              description="Linear noise power for the deterministic SINR metric.")
 
-    # --- field / receiver grid ---
-    axis = string_field("z", options=["x", "y", "z"], enum_toggle=True, title="Field",
-                        description="Plane normal axis.")
-    height = float_field(1.5, description="Plane offset along the axis (m).")
-    bounds = vector4_field([-10.0, 10.0, -10.0, 10.0],
-                           description="Tangential extents [min0, max0, min1, max1].")
-    grid_mode = string_field("grid_shape", options=["grid_shape", "cell_size"], enum_toggle=True,
-                             description="Discretize by cell counts or by cell size.")
-    grid_nx = int_field(64, min=1, show_if=_GRID_SHAPE, horizontal_group="Grid shape")
-    grid_ny = int_field(64, min=1, show_if=_GRID_SHAPE, horizontal_group="Grid shape")
-    cell_dx = float_field(0.5, min=1e-6, show_if=_CELL_SIZE, horizontal_group="Cell size")
-    cell_dy = float_field(0.5, min=1e-6, show_if=_CELL_SIZE, horizontal_group="Cell size")
-
     # --- solver selection + transmitter ---
     solver = string_field("montecarlo", options=["deterministic", "montecarlo"],
-                          enum_toggle=True, title="Solve",
-                          description="Monte Carlo is the robust default; deterministic needs its OptiX pipeline to compile.")
-    transmitter = string_field("", description="Transmitter name (blank = first Tx in the scene).")
+                          enum_toggle=True, group=_SCENE, title="Solve",
+                          description="Monte Carlo is the robust default; deterministic needs its OptiX pipeline.")
+    transmitter = string_field("", group=_SCENE,
+                               description="Transmitter name (blank = first Tx in the scene).")
+    metric = string_field("path_gain", options=["path_gain", "rss", "sinr"], enum_toggle=True,
+                          group=_SCENE, description="Radiomap metric to display.")
+    tx_index = int_field(0, min=0, group=_SCENE, description="Transmitter index (multi-Tx results).")
+    log_scale = bool_field(True, group=_SCENE, description="Show the map in dB (10*log10).")
+    send_to_results = bool_field(False, group=_SCENE,
+                                 description="Also publish to the versioned Results panel.")
 
     # --- deterministic config ---
     det_metric = string_field("path_gain", options=["path_gain", "rss", "sinr"], show_if=_DET,
@@ -137,28 +149,13 @@ class RadioMapComponent(Component):
     ep_edge_diffraction = string_field("default", options=["default", "on", "off"], group=_EDGE,
                                        description="Boundary-edge diffraction (default lets the solver decide).")
 
-    # --- result visualization ---
-    metric = string_field("path_gain", options=["path_gain", "rss", "sinr"], enum_toggle=True,
-                          title="Radiomap")
-    tx_index = int_field(0, min=0, description="Transmitter index (multi-Tx results).")
-    log_scale = bool_field(True, description="Show the map in dB (10*log10).")
-    auto_range = bool_field(True, title="Value range",
-                            description="Autoscale the color range; uncheck to window it (no re-solve).")
-    range_min = float_field(-120.0, hide_if="auto_range", horizontal_group="Range",
-                            description="Min displayed value (dB if log scale).")
-    range_max = float_field(-40.0, hide_if="auto_range", horizontal_group="Range",
-                            description="Max displayed value (dB if log scale).")
-    send_to_results = bool_field(True, description="Also publish to the versioned Results panel.")
-    result_figure = figure(title="Radiomap")
-
-    @button(display_name="Solve")
+    @button(display_name="Solve", group=_SCENE)
     def solve(self):
         scene = self._owner.scene
         transmitter = self._resolve_transmitter(scene)
         if transmitter is None:
             Notifications.error("Channel", "No transmitter found (add a Tx, or set its name).")
             return "Transmitter not found"
-        self._bounds = vec(self.bounds)
         try:
             self._result = SolveRunner.run(scene, self, transmitter=transmitter,
                                            receiver=self._owner.name)
@@ -169,21 +166,29 @@ class RadioMapComponent(Component):
         Notifications.success("Channel", f"{str(self.solver)} radiomap solved")
         return "Solve complete"
 
-    @button(display_name="Update Map")
+    @button(display_name="Update Map", group=_SCENE)
     def update_map(self):
         if self._result is None:
             return "Solve first"
-        auto = bool(self.auto_range)
-        img = RadioMapExtractor.extract(
-            self._result, metric=str(self.metric), tx_index=int(self.tx_index),
-            bounds=self._bounds, log_scale=bool(self.log_scale),
-            vmin=None if auto else float(num(self.range_min)),
-            vmax=None if auto else float(num(self.range_max)))
-        self.result_figure.clear().imshow(img.data).title(img.label)
+        img = RadioMapExtractor.extract(self._result, metric=str(self.metric),
+                                        tx_index=int(self.tx_index), bounds=[0.0, 1.0, 0.0, 1.0],
+                                        log_scale=bool(self.log_scale))
+        self.set_volume_data(self._to_plane_volume(img.data))  # normalizes + sets resolution
+        self.set_field("render_mode", "Slices", force=True)
+        self.export_volume_data()                              # caches -> volume_id -> plane shows
         if bool(self.send_to_results):
-            FieldViz.show_2d(img.data, bounds=((img.extent[0], img.extent[1]),
-                                               (img.extent[2], img.extent[3])), title=img.label)
+            FieldViz.show_2d(img.data, title=img.label)
         return "Map updated"
+
+    def _to_plane_volume(self, data2d: np.ndarray) -> np.ndarray:
+        # Embed the (g0, g1) tangential map into a thin 3D volume on the selected plane.
+        normal, t0, t1 = PLANE_AXES[str(self.plane)]
+        g0, g1 = int(data2d.shape[0]), int(data2d.shape[1])
+        shape = [1, 1, 1]
+        shape[t0], shape[t1] = g0, g1
+        vol = np.zeros(shape, dtype=np.float32)
+        np.moveaxis(vol, (t0, t1, normal), (0, 1, 2))[:, :, 0] = np.asarray(data2d, dtype=np.float32)
+        return vol
 
     def _resolve_transmitter(self, scene):
         # Use the named transmitter if set + valid; else the first Tx object in the scene.

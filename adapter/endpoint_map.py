@@ -20,6 +20,11 @@ TX_COMPONENT = "ChannelTx"
 RX_COMPONENT = "ChannelRx"
 RADIOMAP_COMPONENT = "RadioMap"
 
+# The RadioMap reuses the inherited Field region: plane <-> grid axis + tangential axes.
+# plane -> (grid axis, normal index, tangential0 index, tangential1 index).
+_PLANE_INFO = {"XY": ("z", 2, 0, 1), "XZ": ("y", 1, 0, 2), "YZ": ("x", 0, 1, 2)}
+_AXIS_TO_PLANE = {"z": "XY", "y": "XZ", "x": "YZ"}
+
 
 class EndpointMap:
     """Channel endpoints <-> studio Empty objects (antenna inline on the component)."""
@@ -57,27 +62,37 @@ class EndpointMap:
     @staticmethod
     def radiomap_to_studio(grid: Any, *, frequency: Optional[float], device: str,
                            noise_power: Optional[float] = None) -> SceneObject:
-        """Build a RadioMap Empty object from a platform ``ReceiverGrid`` + scene config."""
+        """Build a RadioMap (Field subclass) object from a platform ``ReceiverGrid`` + config.
+
+        The grid is stored in the inherited Field's local frame: the object Transform sits
+        at the grid center and ``min_bound`` / ``max_bound`` hold the half-extents on the
+        plane (so the grid follows the Transform).
+        """
         from ..components.radiomap import RadioMapComponent
 
         obj = SceneObject(name=grid.name, mesh_type="Empty")
         comp = obj.add_component(RadioMapComponent())
-        comp.frequency = 0.0 if frequency is None else float(frequency)
+        comp.frequency = 3.5e9 if frequency is None else float(frequency)
         comp.device = device
         if noise_power is not None:
             comp.use_noise_power = True
             comp.noise_power = float(noise_power)
-        comp.axis = str(grid.axis)
-        comp.height = float(grid.position)
-        comp.bounds = [float(grid.bounds[0][0]), float(grid.bounds[0][1]),
-                       float(grid.bounds[1][0]), float(grid.bounds[1][1])]
-        if grid.grid_shape is not None:
-            comp.grid_mode = "grid_shape"
-            comp.grid_nx, comp.grid_ny = int(grid.grid_shape[0]), int(grid.grid_shape[1])
-        else:
-            comp.grid_mode = "cell_size"
-            comp.cell_dx, comp.cell_dy = float(grid.cell_size[0]), float(grid.cell_size[1])
-        EndpointMap._set_position(obj, EndpointMap._grid_center(grid.axis, grid.position, grid.bounds))
+
+        plane = _AXIS_TO_PLANE[str(grid.axis)]
+        _, normal, t0, t1 = _PLANE_INFO[plane]
+        b = grid.bounds
+        c0, c1 = 0.5 * (b[0][0] + b[0][1]), 0.5 * (b[1][0] + b[1][1])
+        center = [0.0, 0.0, 0.0]
+        center[t0], center[t1], center[normal] = c0, c1, float(grid.position)
+        mn, mx = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
+        mn[t0], mx[t0] = b[0][0] - c0, b[0][1] - c0
+        mn[t1], mx[t1] = b[1][0] - c1, b[1][1] - c1
+
+        comp.plane = plane
+        comp.min_bound = mn
+        comp.max_bound = mx
+        comp.resolution = EndpointMap._grid_resolution(grid, normal, t0, t1)
+        EndpointMap._set_position(obj, center)
         return obj
 
     # --- studio -> platform --------------------------------------------------
@@ -104,17 +119,21 @@ class EndpointMap:
 
     @staticmethod
     def radiomap_to_platform(ch: Any, obj: SceneObject) -> Any:
-        """Build a platform ``ReceiverGrid`` from a RadioMap object (the grid)."""
+        """Build a platform ``ReceiverGrid`` from a RadioMap object (the Field region).
+
+        The Field's ``min_bound`` / ``max_bound`` are local; the world grid is the object
+        Transform position plus those extents on the selected plane.
+        """
         comp = obj.get_component(RADIOMAP_COMPONENT)
-        b = vec(comp.bounds)
-        bounds = ((b[0], b[1]), (b[2], b[3]))
-        grid_shape = cell_size = None
-        if str(comp.grid_mode) == "grid_shape":
-            grid_shape = (int(comp.grid_nx), int(comp.grid_ny))
-        else:
-            cell_size = (num(comp.cell_dx), num(comp.cell_dy))
-        return ch.ReceiverGrid(name=obj.name, axis=str(comp.axis), position=num(comp.height),
-                               bounds=bounds, grid_shape=grid_shape, cell_size=cell_size)
+        pos = vec(EndpointMap._position(obj))
+        mn, mx = vec(comp.min_bound), vec(comp.max_bound)
+        res = vec(comp.resolution)
+        axis, normal, t0, t1 = _PLANE_INFO[str(comp.plane)]
+        bounds = ((pos[t0] + mn[t0], pos[t0] + mx[t0]), (pos[t1] + mn[t1], pos[t1] + mx[t1]))
+        position = pos[normal] + mn[normal]
+        grid_shape = (max(1, int(res[t0])), max(1, int(res[t1])))
+        return ch.ReceiverGrid(name=obj.name, axis=axis, position=position,
+                               bounds=bounds, grid_shape=grid_shape)
 
     # --- helpers -------------------------------------------------------------
 
@@ -149,13 +168,17 @@ class EndpointMap:
         return opt_vec3(comp.polarization) if bool(comp.use_polarization) else None
 
     @staticmethod
-    def _grid_center(axis: str, position: float, bounds: Any) -> Tuple[float, float, float]:
-        # Plane center (for display Transform placement); see core Grid.center.
-        c0 = 0.5 * (float(bounds[0][0]) + float(bounds[0][1]))
-        c1 = 0.5 * (float(bounds[1][0]) + float(bounds[1][1]))
-        pos = float(position)
-        if axis == "x":
-            return (pos, c0, c1)
-        if axis == "y":
-            return (c0, pos, c1)
-        return (c0, c1, pos)
+    def _grid_resolution(grid: Any, normal: int, t0: int, t1: int) -> list:
+        # Field resolution vector3; tangential axes from grid_shape (or cell_size counts).
+        res = [1, 1, 1]
+        if grid.grid_shape is not None:
+            res[t0], res[t1] = int(grid.grid_shape[0]), int(grid.grid_shape[1])
+            return res
+        cs = grid.cell_size
+        d0 = cs[0] if isinstance(cs, (tuple, list)) else cs
+        d1 = cs[1] if isinstance(cs, (tuple, list)) else cs
+        e0 = abs(grid.bounds[0][1] - grid.bounds[0][0])
+        e1 = abs(grid.bounds[1][1] - grid.bounds[1][0])
+        res[t0] = max(1, round(e0 / float(d0)))
+        res[t1] = max(1, round(e1 / float(d1)))
+        return res
