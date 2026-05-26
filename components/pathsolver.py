@@ -1,11 +1,12 @@
 """PathSolver — point-to-point path solve (CIR/CFR/taps) + viewport ray drawing.
 
-A standalone solver object: it carries the scene config (frequency / device) and the
-path config, auto-finds the transmitter and point receiver in the scene (or uses the
-named ones), solves the discrete Tx<->Rx propagation paths (``path.solve``), keeps the
-``PathResult`` server-side, plots the CIR / CFR / taps, and (when ``draw_paths``) draws
-each ray as a declarative poly-line render spec colored by interaction type
-(LoS / reflection / diffraction). Live solve needs CUDA RayD/OptiX.
+A standalone solver object: it carries the scene config (frequency / device)
+and the path config, auto-finds the transmitter and point receiver in the
+scene (or uses the named ones), solves the discrete Tx<->Rx propagation paths
+(``path.solve``), keeps the ``PathResult`` server-side, plots the CIR / CFR /
+taps, and (when ``draw_paths``) draws every ray as ONE bulk ``ray_batch``
+RenderSpec — every segment of every path packed into one ``LineSegments``
+draw call (RB1-RB5). Live solve needs CUDA RayD/OptiX.
 """
 from witwin_server import Notifications, SceneObject, api
 from witwin_server.components import (
@@ -18,24 +19,30 @@ from witwin_server.components import (
     float_field,
     int_field,
     string_field,
+    vector2_field,
 )
-from witwin_server.components import RenderSpec, lines_geometry, pbr_material
+from witwin_server.components import RenderSpec, ray_batch_geometry, ray_batch_material
 
 from ..adapter.path_solve import PathLineBuilder, PathPlots, PathSolveRunner
 from .category import CATEGORY
 
 _SCENE = "Scene"
 _TAPS = {"field_name": "plot_mode", "operator": "eq", "value": "taps"}
+_GAIN = {"field_name": "color_mode", "operator": "eq", "value": "gain"}
 TX_COMPONENT = "ChannelTx"
 RX_COMPONENT = "ChannelRx"
+
+# Fixed name of the hidden anchor SceneObject this component owns; one anchor
+# per PathSolver instance, looked up via tag because slug ids are scene-scoped.
+_ANCHOR_TAG_PREFIX = "wt_channel:ray_batch:"
 
 
 @component(name="PathSolver", display_name="PathSolver", category=CATEGORY)
 class PathSolverComponent(Component):
-    """Discrete Tx<->Rx path solve + CIR/CFR/taps plots + viewport ray poly-lines."""
+    """Discrete Tx<->Rx path solve + CIR/CFR/taps plots + bulk ray_batch viewport."""
 
     _result = None        # runtime PathResult (never serialized)
-    _path_ids = None      # ids of the viewport ray-path objects this component owns
+    _anchor_id = None     # id of this component's hidden ray-batch anchor object
 
     # --- scene config ---
     frequency = float_field(3.5e9, min=0.0, group=_SCENE,
@@ -61,7 +68,14 @@ class PathSolverComponent(Component):
     synthetic_array = bool_field(True)
 
     # --- visualization ---
-    draw_paths = bool_field(True, description="Draw ray poly-lines in the viewport.")
+    draw_paths = bool_field(True, description="Draw the bulk ray batch in the viewport.")
+    color_mode = string_field("type", options=["type", "gain"], enum_toggle=True, title="Color",
+                              description=("type: LoS / reflection / diffraction "
+                                           "tint; gain: per-path power → colormap."))
+    gain_colormap = string_field("viridis", options=["viridis"], show_if=_GAIN,
+                                 description="Colormap for the gain channel (RB6).")
+    gain_db_range = vector2_field([-120.0, -40.0], show_if=_GAIN,
+                                  description="dB clamp range [min, max] for the gain colormap.")
     plot_mode = string_field("cir", options=["cir", "cfr", "taps"], enum_toggle=True, title="Plot")
     bandwidth = float_field(100e6, min=1.0, show_if=_TAPS, description="Tap synthesis bandwidth (Hz).")
     num_taps = int_field(64, min=1, show_if=_TAPS)
@@ -96,8 +110,8 @@ class PathSolverComponent(Component):
         except Exception as exc:  # noqa: BLE001 - GPU/render boundary: surface, don't swallow
             Notifications.error("Channel", f"path solve failed: {exc}")
             return f"Path solve failed: {exc}"
-        Notifications.success("Channel", f"Path solve {transmitter} -> {receiver}: {drawn} paths")
-        return f"Path solve complete ({drawn} paths)"
+        Notifications.success("Channel", f"Path solve {transmitter} -> {receiver}: {drawn} rays")
+        return f"Path solve complete ({drawn} rays)"
 
     @button(display_name="Update Plot")
     def update_plot(self):
@@ -112,8 +126,14 @@ class PathSolverComponent(Component):
         Notifications.success("Channel", f"{self.plot_mode} plot updated")
         return "Plot updated"
 
-    @button(display_name="Draw Paths")
+    @button(display_name="Recolor / Redraw")
     def draw(self):
+        """Re-emit the ray batch with the current color_mode / gain settings.
+
+        Costs nothing on the WebSocket: the binary asset is content-addressed,
+        so an unchanged batch dedupes to the same asset id and the frontend
+        cache hits. Use this after toggling color_mode or gain_db_range.
+        """
         if self._result is None:
             Notifications.warning("Channel", "Solve paths first.")
             return "Solve first"
@@ -122,8 +142,8 @@ class PathSolverComponent(Component):
         except Exception as exc:  # noqa: BLE001 - surface as a toast
             Notifications.error("Channel", f"draw failed: {exc}")
             return f"Draw failed: {exc}"
-        Notifications.success("Channel", f"Drew {drawn} ray paths")
-        return f"Drew {drawn} paths"
+        Notifications.success("Channel", f"Drew {drawn} rays")
+        return f"Drew {drawn} rays"
 
     # --- internals (no notifications; shared by the buttons + solve) ----------
 
@@ -144,24 +164,78 @@ class PathSolverComponent(Component):
         fig.title(data.title)
 
     def _draw(self, scene) -> int:
-        self._clear_paths(scene)
-        ids = []
-        for i, line in enumerate(PathLineBuilder.build(self._result)):
-            obj = SceneObject(name=f"Channel Path {i}", mesh_type="Empty")
-            scene.add_object(obj)
-            spec = RenderSpec(lines_geometry(line.positions), pbr_material(color=line.color))
-            api.viewport.set_render_spec(obj.id, spec.to_dict())
-            ids.append(obj.id)
-        self._path_ids = ids
-        return len(ids)
+        """Push the whole result as ONE ray_batch RenderSpec on a hidden anchor."""
+        db_min, db_max = self._gain_range()
+        batch = PathLineBuilder.build_batch(
+            self._result,
+            gain_db_range=(db_min, db_max),
+            colormap=str(self.gain_colormap),
+        )
+        anchor = self._ensure_anchor(scene)
+        if batch.empty:
+            api.viewport.clear_render_spec(anchor.id)
+            return 0
+        # Register the bulk arrays as a content-addressed binary asset; the
+        # frontend fetches it once and caches by content hash. Re-solving the
+        # same batch (or just flipping color_mode without changing gain bounds)
+        # dedupes to the same asset.
+        meta = api.viewport.register_ray_batch(
+            batch.segments,
+            colors_type=batch.colors_type,
+            colors_gain=batch.colors_gain,
+            types=batch.types,
+            scene_id=scene.scene_id,
+        )
+        spec = RenderSpec(
+            geometry=ray_batch_geometry(
+                segment_count=batch.segment_count,
+                binary=meta,
+                color_channel=str(self.color_mode),
+                bounds=meta.get("bounds"),
+            ),
+            material=ray_batch_material(additive=(str(self.color_mode) == "gain")),
+        )
+        api.viewport.set_render_spec(anchor.id, spec.to_dict())
+        return batch.segment_count
 
-    def _clear_paths(self, scene):
-        # Remove the ray-path objects from a previous solve so they don't pile up.
-        for object_id in (self._path_ids or []):
-            api.viewport.clear_render_spec(object_id)
-            if scene.get_object(object_id) is not None:
-                scene.remove_object(object_id)
-        self._path_ids = []
+    def _ensure_anchor(self, scene):
+        """Find or create this component's hidden ray-batch anchor SceneObject.
+
+        The anchor is ``system=True`` so it never appears in Hierarchy nor in
+        the .wtscene file; one anchor per PathSolver instance, looked up by a
+        per-component tag to survive scene reloads that re-instantiate this
+        Python component (``self._anchor_id`` is in-memory only).
+        """
+        owner_id = self._owner.id if self._owner is not None else "0"
+        tag = _ANCHOR_TAG_PREFIX + str(owner_id)
+        if self._anchor_id is not None:
+            obj = scene.get_object(self._anchor_id)
+            if obj is not None and obj.tag == tag:
+                return obj
+        for obj in scene.objects.values():
+            if obj.tag == tag:
+                self._anchor_id = obj.id
+                return obj
+        anchor = SceneObject(
+            name="Channel Path Rays",
+            mesh_type="Empty",
+            tag=tag,
+            system=True,
+            disable_transform=True,
+            allow_add_components=False,
+        )
+        scene.add_object(anchor)
+        self._anchor_id = anchor.id
+        return anchor
+
+    def _gain_range(self) -> tuple:
+        rng = self.gain_db_range
+        if rng is None:
+            return (-120.0, -40.0)
+        try:
+            return (float(rng[0]), float(rng[1]))
+        except Exception:  # noqa: BLE001 - vector2 may be None pre-init
+            return (-120.0, -40.0)
 
     def _resolve(self, field_name, component_name):
         # Use the referenced endpoint object if assigned; else the first matching one.
