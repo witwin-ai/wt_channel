@@ -150,25 +150,30 @@ class RadioMapComponent(FieldComponent):
                                        description="Boundary-edge diffraction (default lets the solver decide).")
 
     @button(display_name="Solve", group=_SCENE)
-    def solve(self):
+    async def solve(self):
+        import asyncio
+
         from ..adapter.channel_adapter import ChannelAdapter
+        from ..adapter.offload import run_off_loop
 
         scene = self._owner.scene
         transmitter = self._resolve_transmitter(scene)
         if transmitter is None:
-            Notifications.error("Channel", "No transmitter found (add a Tx, or set its name).")
+            Notifications.error("Channel", "No transmitter found (add a Tx, or assign one).")
             return "Transmitter not found"
         if not ChannelAdapter.has_structures(scene):
             Notifications.error("Channel", "Radiomap solve needs at least one structure/mesh "
                                 "(e.g. a ground plane or building). Add geometry to the scene.")
             return "No structures in scene"
         try:
-            self._result = SolveRunner.run(scene, self, transmitter=transmitter,
-                                           receiver=self._owner.name)
+            # Off the event loop so it stays free to deliver the result broadcasts.
+            self._result = await run_off_loop(SolveRunner.run, scene, self,
+                                              transmitter=transmitter, receiver=self._owner.name)
+            self.update_map()
         except Exception as exc:  # noqa: BLE001 - GPU solver boundary: notify, don't crash the button
             Notifications.error("Channel", f"{self.solver} solve failed: {exc}")
             return f"Solve failed: {exc}"
-        self.update_map()
+        await asyncio.sleep(0)  # flush the field-update broadcasts on the (free) loop
         Notifications.success("Channel", f"{str(self.solver)} radiomap solved")
         return "Solve complete"
 

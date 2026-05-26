@@ -68,8 +68,11 @@ class PathSolverComponent(Component):
     path_figure = figure(title="Channel Response")
 
     @button(display_name="Solve Paths")
-    def solve(self):
+    async def solve(self):
+        import asyncio
+
         from ..adapter.channel_adapter import ChannelAdapter
+        from ..adapter.offload import run_off_loop
 
         scene = self._owner.scene
         transmitter = self._resolve("transmitter", TX_COMPONENT)
@@ -84,16 +87,17 @@ class PathSolverComponent(Component):
             Notifications.error("Channel", "Path solve needs at least one structure/mesh "
                                 "(e.g. a ground plane or building). Add geometry to the scene.")
             return "No structures in scene"
-        # Run + plot + draw share one boundary so any failure surfaces as a toast (the
-        # button dispatcher otherwise logs uncaught errors to the Console only).
+        # Run off the loop (so broadcasts deliver), then plot + draw; one boundary so any
+        # failure surfaces as a toast (the dispatcher otherwise logs to the Console only).
         try:
-            self._result = PathSolveRunner.run(scene, self, transmitter=transmitter,
-                                               receiver=receiver)
+            self._result = await run_off_loop(PathSolveRunner.run, scene, self,
+                                              transmitter=transmitter, receiver=receiver)
             self._plot()
             drawn = self._draw(scene) if bool(self.draw_paths) else 0
         except Exception as exc:  # noqa: BLE001 - GPU/render boundary: surface, don't swallow
             Notifications.error("Channel", f"path solve failed: {exc}")
             return f"Path solve failed: {exc}"
+        await asyncio.sleep(0)  # flush the object_created/updated + plot broadcasts
         Notifications.success("Channel", f"Path solve {transmitter} -> {receiver}: {drawn} paths")
         return f"Path solve complete ({drawn} paths)"
 

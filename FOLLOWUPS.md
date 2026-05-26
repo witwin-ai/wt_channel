@@ -24,6 +24,28 @@ Still unverified (no running server this session): the live editor load via
 `load_platform_scene` with factory `wt_channel.examples.demo_scene:build_scene`, and
 the actual viewport rendering of the radiomap textured plane / ray poly-lines.
 
+## Base-layer fragility: broadcasts dropped during a blocking button callback
+
+Symptom: a RadioMap / PathSolver **Solve** ran server-side (logs showed the result +
+`[Notifications] ... N paths`) but the frontend received nothing — no toast, no plane
+update, no `Channel Path` objects in the Hierarchy.
+
+Root cause (in `witwin_server`, not this plugin): the server awaits component button
+callbacks directly on its asyncio event loop, so a multi-second synchronous GPU solve
+**blocks the loop**. `server._safe_broadcast` schedules each broadcast with an
+unreferenced ``asyncio.create_task`` (asyncio holds only *weak* references to tasks), so
+the heavy solve's GC churn collects those tasks before the loop can run them → the
+`notification_added` / `object_created` / `object_updated` frames are silently dropped.
+
+Plugin-side workaround (shipped): the Solve buttons are now ``async`` and run the blocking
+solve on a dedicated single worker thread (``adapter/offload.run_off_loop``), then
+``await asyncio.sleep(0)`` so the result broadcasts flush on the now-free loop. One shared
+worker thread keeps the drjit / CUDA / OptiX context (which is thread-affine) consistent.
+
+Recommended base-layer fix (would benefit every plugin): have ``_safe_broadcast`` keep a
+strong reference to the created task until it completes (e.g. add it to a ``set`` and
+discard on done-callback), instead of relying on a bare ``create_task``.
+
 ## Requested base-layer change (do NOT make from this plugin)
 
 Core ships `witwin_server/components/transmitter.py` and `receiver.py`
