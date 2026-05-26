@@ -13,6 +13,7 @@ from witwin_server.components import (
     bool_field,
     button,
     component,
+    component_field,
     figure,
     float_field,
     int_field,
@@ -45,9 +46,11 @@ class PathSolverComponent(Component):
     noise_power = float_field(1e-13, min=0.0, group=_SCENE, show_if="use_noise_power",
                              description="Linear noise power (carried with the scene config).")
 
-    # --- endpoints (blank = auto-find in the scene) ---
-    transmitter = string_field("", title="Solve", description="Transmitter name (blank = first Tx).")
-    receiver = string_field("", description="Point Receiver name (blank = first Rx; not a RadioMap).")
+    # --- endpoints (empty = auto-find the first one in the scene) ---
+    transmitter = component_field("ChannelTx", title="Solve",
+                                  description="Transmitter object (empty = first Tx).")
+    receiver = component_field("ChannelRx",
+                              description="Point Receiver object (empty = first Rx; not a RadioMap).")
 
     # --- path config ---
     num_samples = int_field(10000, min=1, description="Probe ray count.")
@@ -69,13 +72,13 @@ class PathSolverComponent(Component):
         from ..adapter.channel_adapter import ChannelAdapter
 
         scene = self._owner.scene
-        transmitter = self._resolve(scene, self.transmitter, TX_COMPONENT)
+        transmitter = self._resolve("transmitter", TX_COMPONENT)
         if transmitter is None:
-            Notifications.error("Channel", "No transmitter found (add a Tx, or set its name).")
+            Notifications.error("Channel", "No transmitter found (add a Tx, or assign one).")
             return "Transmitter not found"
-        receiver = self._resolve(scene, self.receiver, RX_COMPONENT)
+        receiver = self._resolve("receiver", RX_COMPONENT)
         if receiver is None:
-            Notifications.error("Channel", "No point Receiver found (add an Rx, or set its name).")
+            Notifications.error("Channel", "No point Receiver found (add an Rx, or assign one).")
             return "Receiver not found"
         if not ChannelAdapter.has_structures(scene):
             Notifications.error("Channel", "Path solve needs at least one structure/mesh "
@@ -155,16 +158,12 @@ class PathSolverComponent(Component):
                 scene.remove_object(object_id)
         self._path_ids = []
 
-    @staticmethod
-    def _resolve(scene, field_value, component_name):
-        # Use the named endpoint if set + valid; else the first matching object in the scene.
-        name = str(field_value).strip()
-        if name:
-            obj = scene.get_object_by_name(name)
-            if obj is not None and obj.get_component(component_name) is not None:
-                return name
-            return None
-        for obj in scene.objects.values():
+    def _resolve(self, field_name, component_name):
+        # Use the referenced endpoint object if assigned; else the first matching one.
+        ref = self.get_referenced_component(field_name)
+        if ref is not None and ref._owner is not None:
+            return ref._owner.name
+        for obj in self._owner.scene.objects.values():
             if obj.get_component(component_name) is not None:
                 return obj.name
         return None

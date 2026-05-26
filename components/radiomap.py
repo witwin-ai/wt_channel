@@ -19,6 +19,7 @@ from witwin_server.components import (
     bool_field,
     button,
     component,
+    component_field,
     float_field,
     int_field,
     string_field,
@@ -78,8 +79,8 @@ class RadioMapComponent(FieldComponent):
     solver = string_field("montecarlo", options=["deterministic", "montecarlo"],
                           enum_toggle=True, group=_SCENE, title="Solve",
                           description="Monte Carlo is the robust default; deterministic needs its OptiX pipeline.")
-    transmitter = string_field("", group=_SCENE,
-                               description="Transmitter name (blank = first Tx in the scene).")
+    transmitter = component_field("ChannelTx", group=_SCENE,
+                                  description="Transmitter object (empty = first Tx in the scene).")
     metric = string_field("path_gain", options=["path_gain", "rss", "sinr"], enum_toggle=True,
                           group=_SCENE, description="Radiomap metric to display.")
     tx_index = int_field(0, min=0, group=_SCENE, description="Transmitter index (multi-Tx results).")
@@ -204,13 +205,10 @@ class RadioMapComponent(FieldComponent):
         return vol
 
     def _resolve_transmitter(self, scene):
-        # Use the named transmitter if set + valid; else the first Tx object in the scene.
-        name = str(self.transmitter).strip()
-        if name:
-            obj = scene.get_object_by_name(name)
-            if obj is not None and obj.get_component(TX_COMPONENT) is not None:
-                return name
-            return None
+        # Use the referenced Tx object if set; else the first Tx object in the scene.
+        ref = self.get_referenced_component("transmitter")
+        if ref is not None and ref._owner is not None:
+            return ref._owner.name
         for obj in scene.objects.values():
             if obj.get_component(TX_COMPONENT) is not None:
                 return obj.name
