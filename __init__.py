@@ -11,10 +11,10 @@ Importing this package (eager: no ``activationEvents``):
 No ``witwin.channel`` import happens at module load: the adapter maps lazy-import
 it inside their methods, so the plugin still registers its (schema-only) components
 on a machine without the channel solver (drjit / CUDA RayD) installed. The shared
-base layer (``witwin_server.platform_bridge`` + the unified ``EMMaterial``
+base layer (``witwin_server.features.platform.bridge`` + the unified ``Material``
 component) is in core and frozen; this plugin only reads/writes it.
 """
-from witwin_server.handlers.platform_scene import PlatformSceneHandler
+from witwin_server.features.platform.scene_handlers import PlatformSceneHandler
 
 from . import components  # noqa: F401  (side-effect: registers channel components)
 from . import library_items  # noqa: F401  (side-effect: registers Channel library prefabs)

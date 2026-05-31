@@ -15,7 +15,7 @@ Live solve needs CUDA RayD/OptiX (the round-trip / config tests run on CPU).
 import numpy as np
 
 from witwin_server import Notifications
-from witwin_server.components import (
+from witwin_server.core.components import (
     bool_field,
     button,
     component,
@@ -25,8 +25,8 @@ from witwin_server.components import (
     string_field,
     vector3_field,
 )
-from witwin_server.components.field_region import FREQUENCY_UNITS, FieldComponent
-from witwin_server.platform_bridge import FieldViz
+from witwin_server.core.components.field_region import FREQUENCY_UNITS, FieldComponent
+from witwin_server.features.platform.bridge import FieldViz
 
 from ..adapter.common import num
 from ..adapter.solve import RadioMapExtractor, SolveRunner

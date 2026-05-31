@@ -157,7 +157,7 @@ def test_value_range_clamps_without_resolve():
 
 
 def test_library_items_registered(wtc):
-    from witwin_server.handlers.library import _pending_items
+    from witwin_server.features.library.service import _pending_items
 
     names = set(_pending_items)
     assert {"channel_demo", "channel_tx", "channel_rx", "channel_radiomap",

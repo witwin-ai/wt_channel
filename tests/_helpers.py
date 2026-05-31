@@ -9,7 +9,7 @@ stays primitive-agnostic.
 from typing import Any, Dict, List
 
 import numpy as np
-from witwin_server.platform_bridge import GeometryMap
+from witwin_server.features.platform.bridge import GeometryMap
 
 ATOL = 1e-4
 

@@ -55,7 +55,7 @@ def _pathsolver_object(name):
 def _ground_object():
     import witwin.channel as ch  # noqa: F401  (ensures the channel material API is importable)
     from witwin.core import Box, Material, Structure
-    from witwin_server.platform_bridge import StructureMap
+    from witwin_server.features.platform.bridge import StructureMap
 
     from .adapter.material_map import ChannelMaterialMap
 

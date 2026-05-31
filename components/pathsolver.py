@@ -9,7 +9,7 @@ RenderSpec — every segment of every path packed into one ``LineSegments``
 draw call (RB1-RB5). Live solve needs CUDA RayD/OptiX.
 """
 from witwin_server import Notifications, SceneObject, api
-from witwin_server.components import (
+from witwin_server.core.components import (
     Component,
     bool_field,
     button,
@@ -21,7 +21,7 @@ from witwin_server.components import (
     string_field,
     vector2_field,
 )
-from witwin_server.components import RenderSpec, ray_batch_geometry, ray_batch_material
+from witwin_server.core.components import RenderSpec, ray_batch_geometry, ray_batch_material
 
 from ..adapter.path_solve import PathLineBuilder, PathPlots, PathSolveRunner
 from .category import CATEGORY
@@ -101,12 +101,18 @@ class PathSolverComponent(Component):
             return "No structures in scene"
         # Run off the loop so the GPU solve doesn't block the asyncio loop while
         # broadcasts are queued; one try-boundary so any failure surfaces as a
-        # toast (the dispatcher otherwise logs to the Console only).
+        # toast (the dispatcher otherwise logs to the Console only). Crucially,
+        # we also do plot/batch *extraction* on the same worker thread — the
+        # PathResult's tensors are DrJit cuda.ad and are pinned to the JIT scope
+        # of the thread that produced them; touching .cir() / .taps() / .cfr()
+        # or to_torch_view(...) from any other thread trips DrJit's "scope X
+        # depends on scope Y" assertion.
+        draw = bool(self.draw_paths)
         try:
-            self._result = await run_off_loop(PathSolveRunner.run, scene, self,
-                                              transmitter=transmitter, receiver=receiver)
-            self._plot()
-            drawn = self._draw(scene) if bool(self.draw_paths) else 0
+            plot_data, batch = await run_off_loop(
+                self._solve_extract, scene, transmitter, receiver, draw)
+            self._publish_plot(plot_data)
+            drawn = self._publish_draw(scene, batch) if draw else 0
         except Exception as exc:  # noqa: BLE001 - GPU/render boundary: surface, don't swallow
             Notifications.error("Channel", f"path solve failed: {exc}")
             return f"Path solve failed: {exc}"
@@ -114,12 +120,16 @@ class PathSolverComponent(Component):
         return f"Path solve complete ({drawn} rays)"
 
     @button(display_name="Update Plot")
-    def update_plot(self):
+    async def update_plot(self):
+        from ..adapter.offload import run_off_loop
+
         if self._result is None:
             Notifications.warning("Channel", "Solve paths first.")
             return "Solve first"
         try:
-            self._plot()
+            # Extract on the solve worker thread — see solve() for why.
+            data = await run_off_loop(self._extract_plot_data)
+            self._publish_plot(data)
         except Exception as exc:  # noqa: BLE001 - surface as a toast
             Notifications.error("Channel", f"plot failed: {exc}")
             return f"Plot failed: {exc}"
@@ -127,18 +137,22 @@ class PathSolverComponent(Component):
         return "Plot updated"
 
     @button(display_name="Recolor / Redraw")
-    def draw(self):
+    async def draw(self):
         """Re-emit the ray batch with the current color_mode / gain settings.
 
         Costs nothing on the WebSocket: the binary asset is content-addressed,
         so an unchanged batch dedupes to the same asset id and the frontend
         cache hits. Use this after toggling color_mode or gain_db_range.
         """
+        from ..adapter.offload import run_off_loop
+
         if self._result is None:
             Notifications.warning("Channel", "Solve paths first.")
             return "Solve first"
         try:
-            drawn = self._draw(self._owner.scene)
+            # Extract on the solve worker thread — see solve() for why.
+            batch = await run_off_loop(self._extract_batch)
+            drawn = self._publish_draw(self._owner.scene, batch)
         except Exception as exc:  # noqa: BLE001 - surface as a toast
             Notifications.error("Channel", f"draw failed: {exc}")
             return f"Draw failed: {exc}"
@@ -146,16 +160,54 @@ class PathSolverComponent(Component):
         return f"Drew {drawn} rays"
 
     # --- internals (no notifications; shared by the buttons + solve) ----------
+    #
+    # DrJit thread-affinity rule for this component: the platform's PathResult
+    # holds cuda.ad tensors whose JIT scope belongs to the thread that produced
+    # them. Anything that reads them (`.cir()`, `.taps()`, `.cfr()`, or
+    # `to_torch_view(...)`, which returns a live DLPack view, not a copy) must
+    # run on that same thread, otherwise DrJit raises
+    # ``jitc_assemble(): variable rX (scope A) depends on rY (scope B)``.
+    # The wt_channel-solve ThreadPoolExecutor in offload.py is a single-worker
+    # pool exactly so the same thread services every solve and every extraction.
+    # So: ``_extract_*`` methods touch the result (worker thread only),
+    # ``_publish_*`` methods touch the scene / figure / viewport API (main
+    # thread only), and the sync ``_plot`` / ``_draw`` wrappers chain them
+    # together for unit tests that use a torch-only synthetic PathResult where
+    # thread affinity is moot.
 
-    def _plot(self):
+    def _solve_extract(self, scene, transmitter, receiver, draw):
+        """Worker-thread: run the solve AND extract everything DrJit-backed.
+
+        Returns ``(plot_data, batch_or_None)`` as pure numpy so the caller can
+        publish on the main asyncio thread without touching DrJit.
+        """
+        self._result = PathSolveRunner.run(
+            scene, self, transmitter=transmitter, receiver=receiver)
+        plot_data = self._extract_plot_data()
+        batch = self._extract_batch() if draw else None
+        return plot_data, batch
+
+    def _extract_plot_data(self):
+        """Worker-thread: build a pure-numpy PlotData from ``self._result``."""
         mode = str(self.plot_mode)
         if mode == "cfr":
-            data = PathPlots.cfr(self._result)
-        elif mode == "taps":
-            data = PathPlots.taps(self._result, bandwidth=float(self.bandwidth),
+            return PathPlots.cfr(self._result)
+        if mode == "taps":
+            return PathPlots.taps(self._result, bandwidth=float(self.bandwidth),
                                   num_taps=int(self.num_taps))
-        else:
-            data = PathPlots.cir(self._result)
+        return PathPlots.cir(self._result)
+
+    def _extract_batch(self):
+        """Worker-thread: build the numpy RayBatch from ``self._result``."""
+        db_min, db_max = self._gain_range()
+        return PathLineBuilder.build_batch(
+            self._result,
+            gain_db_range=(db_min, db_max),
+            colormap=str(self.gain_colormap),
+        )
+
+    def _publish_plot(self, data):
+        """Main-thread: update the figure from a pure-numpy PlotData."""
         fig = self.path_figure.clear()
         # Pass the ndarrays directly: Figure._to_list has a fast path for them.
         # list(np.ndarray) would unwrap to a list of numpy scalars, which JSON
@@ -163,16 +215,10 @@ class PathSolverComponent(Component):
         (fig.stem if data.kind == "stem" else fig.line)(data.x, data.y)
         fig.title(data.title)
 
-    def _draw(self, scene) -> int:
-        """Push the whole result as ONE ray_batch RenderSpec on a hidden anchor."""
-        db_min, db_max = self._gain_range()
-        batch = PathLineBuilder.build_batch(
-            self._result,
-            gain_db_range=(db_min, db_max),
-            colormap=str(self.gain_colormap),
-        )
+    def _publish_draw(self, scene, batch) -> int:
+        """Main-thread: push ``batch`` as one ray_batch RenderSpec on a hidden anchor."""
         anchor = self._ensure_anchor(scene)
-        if batch.empty:
+        if batch is None or batch.empty:
             api.viewport.clear_render_spec(anchor.id)
             return 0
         # Register the bulk arrays as a content-addressed binary asset; the
@@ -197,6 +243,17 @@ class PathSolverComponent(Component):
         )
         api.viewport.set_render_spec(anchor.id, spec.to_dict())
         return batch.segment_count
+
+    # Sync convenience wrappers — only safe for callers that hold the
+    # PathResult on the thread that produced it (e.g. unit tests that build a
+    # torch-only synthetic result). The async buttons MUST go through
+    # _extract_* + _publish_* via run_off_loop instead.
+
+    def _plot(self):
+        self._publish_plot(self._extract_plot_data())
+
+    def _draw(self, scene) -> int:
+        return self._publish_draw(scene, self._extract_batch())
 
     def _ensure_anchor(self, scene):
         """Find or create this component's hidden ray-batch anchor SceneObject.

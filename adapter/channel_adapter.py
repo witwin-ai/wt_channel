@@ -14,7 +14,7 @@ discovered from them on export.
 from typing import Any, List, Optional, Tuple
 
 from witwin_server import Scene, SceneObject
-from witwin_server.platform_bridge import GeometryMap, StructureMap, TransformMap
+from witwin_server.features.platform.bridge import GeometryMap, StructureMap, TransformMap
 
 from .common import device_name, num, vec
 from .endpoint_map import RADIOMAP_COMPONENT, RX_COMPONENT, TX_COMPONENT, EndpointMap
@@ -139,8 +139,15 @@ class ChannelAdapter:
     @staticmethod
     def _mesh_material(ch: Any, obj: SceneObject, scene_frequency: Optional[float]) -> Any:
         # Plain meshes default to ITU concrete so every triangle has an assigned material;
-        # an explicit EMMaterial / MaterialPreset on the object still wins.
-        if obj.get_component("MaterialPreset") is not None or obj.get_component("EMMaterial") is not None:
+        # an explicit MaterialPreset / named scalar Material on the object still wins.
+        # NB: in the material-system rewrite every SceneObject now carries a Material
+        # component by default, so "has Material" is no longer a useful signal of intent.
+        # We use ``material_name != ""`` instead — the user explicitly named the
+        # scalar EM material on the unified Material component's Electromagnetic foldout.
+        if obj.get_component("MaterialPreset") is not None:
+            return ChannelMaterialMap.to_platform(ch, obj, scene_frequency)
+        material_comp = obj.get_component("Material")
+        if material_comp is not None and str(material_comp.material_name) != "":
             return ChannelMaterialMap.to_platform(ch, obj, scene_frequency)
         return ch.Material.from_itu("concrete")
 
