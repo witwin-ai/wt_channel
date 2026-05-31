@@ -2,7 +2,7 @@
 
 Two authoring modes (master §4.1, channel keeps presets channel-only):
 
-1. **Explicit scalar** — the unified ``EMMaterial`` component -> ``core.Material``
+1. **Explicit scalar** — the unified ``Material`` component -> ``core.Material``
    (eps_r/mu_r/sigma_e/name) via the frozen ``MaterialMap``. Maxwell-only advanced
    fields are dropped (a Fresnel ray tracer cannot consume dispersion).
 2. **ITU preset** — the ``MaterialPreset`` companion -> ``Material.from_itu(name,
@@ -10,12 +10,12 @@ Two authoring modes (master §4.1, channel keeps presets channel-only):
    ``(name, override)``, never the evaluated numbers.
 
 ``MaterialPreset`` takes precedence: if a structure carries it, the scalar
-``EMMaterial`` is ignored on export.
+``Material``'s EM fields are ignored on export.
 """
 from typing import Any, Optional
 
 from witwin_server import SceneObject
-from witwin_server.platform_bridge import MaterialMap
+from witwin_server.features.platform.bridge import MaterialMap
 
 from .common import num
 
@@ -40,13 +40,13 @@ class ChannelMaterialMap:
 
     @staticmethod
     def to_platform(ch: Any, obj: SceneObject, scene_frequency: Optional[float]) -> Any:
-        """Build the platform material: ITU preset if present, else scalar EMMaterial."""
+        """Build the platform material: ITU preset if present, else scalar Material."""
         preset = obj.get_component("MaterialPreset")
         if preset is not None:
             return ChannelMaterialMap._from_preset(ch, preset, scene_frequency)
-        em = obj.get_component("EMMaterial")
-        if em is not None:
-            return MaterialMap.to_platform(em)
+        material_comp = obj.get_component("Material")
+        if material_comp is not None:
+            return MaterialMap.to_platform(material_comp)
         return ch.Material()
 
     @staticmethod

@@ -1,14 +1,20 @@
 """PathSolver — point-to-point path solve (CIR/CFR/taps) + viewport ray drawing.
 
-A standalone solver object: it carries the scene config (frequency / device) and the
-path config, auto-finds the transmitter and point receiver in the scene (or uses the
-named ones), solves the discrete Tx<->Rx propagation paths (``path.solve``), keeps the
-``PathResult`` server-side, plots the CIR / CFR / taps, and (when ``draw_paths``) draws
-each ray as a declarative poly-line render spec colored by interaction type
-(LoS / reflection / diffraction). Live solve needs CUDA RayD/OptiX.
+A standalone solver object: it carries the scene config (frequency / device)
+and the path config, auto-finds the transmitter and point receiver in the
+scene (or uses the named ones), solves the discrete Tx<->Rx propagation paths
+(``path.solve``), keeps the ``PathResult`` server-side, plots the CIR / CFR /
+taps, and (when ``draw_paths``) draws every ray as ONE bulk ``ray_batch``
+RenderSpec — every segment of every path packed into one ``LineSegments``
+draw call (RB1-RB5). Live solve needs CUDA RayD/OptiX.
 """
+import asyncio
+import io
+
+import numpy as np
+
 from witwin_server import Notifications, SceneObject, api
-from witwin_server.components import (
+from witwin_server.core.components import (
     Component,
     bool_field,
     button,
@@ -18,24 +24,32 @@ from witwin_server.components import (
     float_field,
     int_field,
     string_field,
+    vector2_field,
 )
-from witwin_server.components import RenderSpec, lines_geometry, pbr_material
+from witwin_server.core.components import RenderSpec, ray_batch_geometry, ray_batch_material
 
-from ..adapter.path_solve import PathLineBuilder, PathPlots, PathSolveRunner
+from ..adapter.path_solve import PathLineBuilder, PathPlots, PathSolveRunner, PlotData, RayBatch
 from .category import CATEGORY
 
 _SCENE = "Scene"
 _TAPS = {"field_name": "plot_mode", "operator": "eq", "value": "taps"}
+_GAIN = {"field_name": "color_mode", "operator": "eq", "value": "gain"}
 TX_COMPONENT = "ChannelTx"
 RX_COMPONENT = "ChannelRx"
+
+# Fixed name of the hidden anchor SceneObject this component owns; one anchor
+# per PathSolver instance, looked up via tag because slug ids are scene-scoped.
+_ANCHOR_TAG_PREFIX = "wt_channel:ray_batch:"
 
 
 @component(name="PathSolver", display_name="PathSolver", category=CATEGORY)
 class PathSolverComponent(Component):
-    """Discrete Tx<->Rx path solve + CIR/CFR/taps plots + viewport ray poly-lines."""
+    """Discrete Tx<->Rx path solve + CIR/CFR/taps plots + bulk ray_batch viewport."""
 
     _result = None        # runtime PathResult (never serialized)
-    _path_ids = None      # ids of the viewport ray-path objects this component owns
+    _anchor_id = None     # id of this component's hidden ray-batch anchor object
+    _solver_result_handle = ""
+    _solver_run_id = ""
 
     # --- scene config ---
     frequency = float_field(3.5e9, min=0.0, group=_SCENE,
@@ -61,7 +75,14 @@ class PathSolverComponent(Component):
     synthetic_array = bool_field(True)
 
     # --- visualization ---
-    draw_paths = bool_field(True, description="Draw ray poly-lines in the viewport.")
+    draw_paths = bool_field(True, description="Draw the bulk ray batch in the viewport.")
+    color_mode = string_field("type", options=["type", "gain"], enum_toggle=True, title="Color",
+                              description=("type: LoS / reflection / diffraction "
+                                           "tint; gain: per-path power → colormap."))
+    gain_colormap = string_field("viridis", options=["viridis"], show_if=_GAIN,
+                                 description="Colormap for the gain channel (RB6).")
+    gain_db_range = vector2_field([-120.0, -40.0], show_if=_GAIN,
+                                  description="dB clamp range [min, max] for the gain colormap.")
     plot_mode = string_field("cir", options=["cir", "cfr", "taps"], enum_toggle=True, title="Plot")
     bandwidth = float_field(100e6, min=1.0, show_if=_TAPS, description="Tap synthesis bandwidth (Hz).")
     num_taps = int_field(64, min=1, show_if=_TAPS)
@@ -69,10 +90,7 @@ class PathSolverComponent(Component):
 
     @button(display_name="Solve Paths")
     async def solve(self):
-        import asyncio
-
         from ..adapter.channel_adapter import ChannelAdapter
-        from ..adapter.offload import run_off_loop
 
         scene = self._owner.scene
         transmitter = self._resolve("transmitter", TX_COMPONENT)
@@ -87,80 +105,303 @@ class PathSolverComponent(Component):
             Notifications.error("Channel", "Path solve needs at least one structure/mesh "
                                 "(e.g. a ground plane or building). Add geometry to the scene.")
             return "No structures in scene"
-        # Run off the loop (so broadcasts deliver), then plot + draw; one boundary so any
-        # failure surfaces as a toast (the dispatcher otherwise logs to the Console only).
+        # The PathResult stays in the solver child; plot and ray batches come back
+        # through RFC-012 queries so DrJit tensors are never touched in this process.
+        draw = bool(self.draw_paths)
         try:
-            self._result = await run_off_loop(PathSolveRunner.run, scene, self,
-                                              transmitter=transmitter, receiver=receiver)
-            self._plot()
-            drawn = self._draw(scene) if bool(self.draw_paths) else 0
+            run = await asyncio.to_thread(
+                api.solvers.solve,
+                "witwin.channel.path",
+                scene=scene,
+                config=self._solver_config(transmitter, receiver),
+                surface_progress=True,
+            )
+            if run.status != "succeeded":
+                message = (run.error or {}).get("message") or "path solve failed"
+                Notifications.error("Channel", message)
+                return f"Path solve failed: {message}"
+            handle = (run.outputs or {}).get("resultHandle")
+            if not handle:
+                Notifications.error("Channel", "Solver returned no result handle")
+                return "Path solve failed: no result handle"
+            self._solver_result_handle = str(handle)
+            self._solver_run_id = run.run_id
+            self._result = None
+            plot_data = self._query_plot_data()
+            batch = self._query_batch() if draw else None
+            self._publish_plot(plot_data)
+            drawn = self._publish_draw(scene, batch) if draw else 0
         except Exception as exc:  # noqa: BLE001 - GPU/render boundary: surface, don't swallow
             Notifications.error("Channel", f"path solve failed: {exc}")
             return f"Path solve failed: {exc}"
-        await asyncio.sleep(0)  # flush the object_created/updated + plot broadcasts
-        Notifications.success("Channel", f"Path solve {transmitter} -> {receiver}: {drawn} paths")
-        return f"Path solve complete ({drawn} paths)"
+        Notifications.success("Channel", f"Path solve {transmitter} -> {receiver}: {drawn} rays")
+        return f"Path solve complete ({drawn} rays)"
 
     @button(display_name="Update Plot")
-    def update_plot(self):
+    async def update_plot(self):
+        if self._solver_result_handle:
+            try:
+                data = self._query_plot_data()
+                self._publish_plot(data)
+            except Exception as exc:  # noqa: BLE001 - surface as a toast
+                Notifications.error("Channel", f"plot failed: {exc}")
+                return f"Plot failed: {exc}"
+            Notifications.success("Channel", f"{self.plot_mode} plot updated")
+            return "Plot updated"
         if self._result is None:
             Notifications.warning("Channel", "Solve paths first.")
             return "Solve first"
+        from ..adapter.offload import run_off_loop
+
         try:
-            self._plot()
+            # Extract on the solve worker thread — see solve() for why.
+            data = await run_off_loop(self._extract_plot_data)
+            self._publish_plot(data)
         except Exception as exc:  # noqa: BLE001 - surface as a toast
             Notifications.error("Channel", f"plot failed: {exc}")
             return f"Plot failed: {exc}"
         Notifications.success("Channel", f"{self.plot_mode} plot updated")
         return "Plot updated"
 
-    @button(display_name="Draw Paths")
-    def draw(self):
+    @button(display_name="Recolor / Redraw")
+    async def draw(self):
+        """Re-emit the ray batch with the current color_mode / gain settings.
+
+        Costs nothing on the WebSocket: the binary asset is content-addressed,
+        so an unchanged batch dedupes to the same asset id and the frontend
+        cache hits. Use this after toggling color_mode or gain_db_range.
+        """
+        if self._solver_result_handle:
+            try:
+                batch = self._query_batch()
+                drawn = self._publish_draw(self._owner.scene, batch)
+            except Exception as exc:  # noqa: BLE001 - surface as a toast
+                Notifications.error("Channel", f"draw failed: {exc}")
+                return f"Draw failed: {exc}"
+            Notifications.success("Channel", f"Drew {drawn} rays")
+            return f"Drew {drawn} rays"
         if self._result is None:
             Notifications.warning("Channel", "Solve paths first.")
             return "Solve first"
+        from ..adapter.offload import run_off_loop
+
         try:
-            drawn = self._draw(self._owner.scene)
+            # Extract on the solve worker thread — see solve() for why.
+            batch = await run_off_loop(self._extract_batch)
+            drawn = self._publish_draw(self._owner.scene, batch)
         except Exception as exc:  # noqa: BLE001 - surface as a toast
             Notifications.error("Channel", f"draw failed: {exc}")
             return f"Draw failed: {exc}"
-        Notifications.success("Channel", f"Drew {drawn} ray paths")
-        return f"Drew {drawn} paths"
+        Notifications.success("Channel", f"Drew {drawn} rays")
+        return f"Drew {drawn} rays"
 
     # --- internals (no notifications; shared by the buttons + solve) ----------
+    #
+    # DrJit thread-affinity rule for this component: the platform's PathResult
+    # holds cuda.ad tensors whose JIT scope belongs to the thread that produced
+    # them. Anything that reads them (`.cir()`, `.taps()`, `.cfr()`, or
+    # `to_torch_view(...)`, which returns a live DLPack view, not a copy) must
+    # run on that same thread, otherwise DrJit raises
+    # ``jitc_assemble(): variable rX (scope A) depends on rY (scope B)``.
+    # The wt_channel-solve ThreadPoolExecutor in offload.py is a single-worker
+    # pool exactly so the same thread services every solve and every extraction.
+    # So: ``_extract_*`` methods touch the result (worker thread only),
+    # ``_publish_*`` methods touch the scene / figure / viewport API (main
+    # thread only), and the sync ``_plot`` / ``_draw`` wrappers chain them
+    # together for unit tests that use a torch-only synthetic PathResult where
+    # thread affinity is moot.
 
-    def _plot(self):
+    def _solve_extract(self, scene, transmitter, receiver, draw):
+        """Worker-thread: run the solve AND extract everything DrJit-backed.
+
+        Returns ``(plot_data, batch_or_None)`` as pure numpy so the caller can
+        publish on the main asyncio thread without touching DrJit.
+        """
+        self._result = PathSolveRunner.run(
+            scene, self, transmitter=transmitter, receiver=receiver)
+        plot_data = self._extract_plot_data()
+        batch = self._extract_batch() if draw else None
+        return plot_data, batch
+
+    def _extract_plot_data(self):
+        """Worker-thread: build a pure-numpy PlotData from ``self._result``."""
         mode = str(self.plot_mode)
         if mode == "cfr":
-            data = PathPlots.cfr(self._result)
-        elif mode == "taps":
-            data = PathPlots.taps(self._result, bandwidth=float(self.bandwidth),
+            return PathPlots.cfr(self._result)
+        if mode == "taps":
+            return PathPlots.taps(self._result, bandwidth=float(self.bandwidth),
                                   num_taps=int(self.num_taps))
-        else:
-            data = PathPlots.cir(self._result)
+        return PathPlots.cir(self._result)
+
+    def _extract_batch(self):
+        """Worker-thread: build the numpy RayBatch from ``self._result``."""
+        db_min, db_max = self._gain_range()
+        return PathLineBuilder.build_batch(
+            self._result,
+            gain_db_range=(db_min, db_max),
+            colormap=str(self.gain_colormap),
+        )
+
+    def _query_plot_data(self) -> PlotData:
+        payload = self._query_result("plot", {
+            "mode": str(self.plot_mode),
+            "bandwidth": float(self.bandwidth),
+            "num_taps": int(self.num_taps),
+        })
+        return PlotData(
+            np.asarray(payload["x"], dtype=np.float32),
+            np.asarray(payload["y"], dtype=np.float32),
+            str(payload.get("kind") or "line"),
+            str(payload.get("xlabel") or ""),
+            str(payload.get("ylabel") or ""),
+            str(payload.get("title") or ""),
+        )
+
+    def _query_batch(self) -> RayBatch:
+        db_min, db_max = self._gain_range()
+        payload = self._query_result("ray_batch", {
+            "gain_db_range": [db_min, db_max],
+            "gain_colormap": str(self.gain_colormap),
+        })
+        return self._load_batch_payload(payload)
+
+    def _query_result(self, op: str, params: dict):
+        response = api.solvers.query(
+            "witwin.channel.path",
+            self._solver_result_handle,
+            op,
+            params,
+            run_id=self._solver_run_id or None,
+        )
+        return response.get("data") or {}
+
+    @staticmethod
+    def _load_batch_payload(payload: dict) -> RayBatch:
+        ref = payload.get("resultRef")
+        if not isinstance(ref, dict) or not ref.get("path"):
+            return RayBatch(
+                np.zeros((0, 2, 3), dtype=np.float32),
+                np.zeros((0, 4), dtype=np.uint8),
+                np.zeros((0, 4), dtype=np.uint8),
+                np.zeros((0,), dtype=np.uint8),
+                np.zeros((0,), dtype=np.int32),
+            )
+        expected = str(ref.get("contentHash") or "")
+        if not expected.startswith("sha256:") or len(expected.split(":", 1)[1]) != 64:
+            raise ValueError("Channel ray batch resultRef contentHash must be sha256")
+        raw = api.solvers.read_result_ref("witwin.channel.path", ref)
+        with np.load(io.BytesIO(raw), allow_pickle=False) as data:
+            return RayBatch(
+                np.asarray(data["segments"], dtype=np.float32),
+                np.asarray(data["colors_type"], dtype=np.uint8),
+                np.asarray(data["colors_gain"], dtype=np.uint8),
+                np.asarray(data["types"], dtype=np.uint8),
+                np.asarray(data["path_index"], dtype=np.int32),
+            )
+
+    def _solver_config(self, transmitter: str, receiver: str) -> dict:
+        return {
+            "mode": "path",
+            "transmitter": transmitter,
+            "receiver": receiver,
+            "component": self._component_config(),
+        }
+
+    def _component_config(self) -> dict:
+        keys = (
+            "frequency", "device", "use_noise_power", "noise_power",
+            "num_samples", "max_bounces", "max_diffraction_order",
+            "use_max_num_paths", "max_num_paths", "synthetic_array", "draw_paths",
+        )
+        return {key: getattr(self, key) for key in keys}
+
+    def _publish_plot(self, data):
+        """Main-thread: update the figure from a pure-numpy PlotData."""
         fig = self.path_figure.clear()
-        (fig.stem if data.kind == "stem" else fig.line)(list(data.x), list(data.y))
+        # Pass the ndarrays directly: Figure._to_list has a fast path for them.
+        # list(np.ndarray) would unwrap to a list of numpy scalars, which JSON
+        # can't encode and which used to silently break the broadcast set.
+        (fig.stem if data.kind == "stem" else fig.line)(data.x, data.y)
         fig.title(data.title)
 
-    def _draw(self, scene) -> int:
-        self._clear_paths(scene)
-        ids = []
-        for i, line in enumerate(PathLineBuilder.build(self._result)):
-            obj = SceneObject(name=f"Channel Path {i}", mesh_type="Empty")
-            scene.add_object(obj)
-            spec = RenderSpec(lines_geometry(line.positions), pbr_material(color=line.color))
-            api.viewport.set_render_spec(obj.id, spec.to_dict())
-            ids.append(obj.id)
-        self._path_ids = ids
-        return len(ids)
+    def _publish_draw(self, scene, batch) -> int:
+        """Main-thread: push ``batch`` as one ray_batch RenderSpec on a hidden anchor."""
+        anchor = self._ensure_anchor(scene)
+        if batch is None or batch.empty:
+            api.viewport.clear_render_spec(anchor.id)
+            return 0
+        # Register the bulk arrays as a content-addressed binary asset; the
+        # frontend fetches it once and caches by content hash. Re-solving the
+        # same batch (or just flipping color_mode without changing gain bounds)
+        # dedupes to the same asset.
+        meta = api.viewport.register_ray_batch(
+            batch.segments,
+            colors_type=batch.colors_type,
+            colors_gain=batch.colors_gain,
+            types=batch.types,
+            scene_id=scene.scene_id,
+        )
+        spec = RenderSpec(
+            geometry=ray_batch_geometry(
+                segment_count=batch.segment_count,
+                binary=meta,
+                color_channel=str(self.color_mode),
+                bounds=meta.get("bounds"),
+            ),
+            material=ray_batch_material(additive=(str(self.color_mode) == "gain")),
+        )
+        api.viewport.set_render_spec(anchor.id, spec.to_dict())
+        return batch.segment_count
 
-    def _clear_paths(self, scene):
-        # Remove the ray-path objects from a previous solve so they don't pile up.
-        for object_id in (self._path_ids or []):
-            api.viewport.clear_render_spec(object_id)
-            if scene.get_object(object_id) is not None:
-                scene.remove_object(object_id)
-        self._path_ids = []
+    # Sync convenience wrappers — only safe for callers that hold the
+    # PathResult on the thread that produced it (e.g. unit tests that build a
+    # torch-only synthetic result). The async buttons MUST go through
+    # _extract_* + _publish_* via run_off_loop instead.
+
+    def _plot(self):
+        self._publish_plot(self._extract_plot_data())
+
+    def _draw(self, scene) -> int:
+        return self._publish_draw(scene, self._extract_batch())
+
+    def _ensure_anchor(self, scene):
+        """Find or create this component's hidden ray-batch anchor SceneObject.
+
+        The anchor is ``system=True`` so it never appears in Hierarchy nor in
+        the .wtscene file; one anchor per PathSolver instance, looked up by a
+        per-component tag to survive scene reloads that re-instantiate this
+        Python component (``self._anchor_id`` is in-memory only).
+        """
+        owner_id = self._owner.id if self._owner is not None else "0"
+        tag = _ANCHOR_TAG_PREFIX + str(owner_id)
+        if self._anchor_id is not None:
+            obj = scene.get_object(self._anchor_id)
+            if obj is not None and obj.tag == tag:
+                return obj
+        for obj in scene.objects.values():
+            if obj.tag == tag:
+                self._anchor_id = obj.id
+                return obj
+        anchor = SceneObject(
+            name="Channel Path Rays",
+            mesh_type="Empty",
+            tag=tag,
+            system=True,
+            disable_transform=True,
+            allow_add_components=False,
+        )
+        scene.add_object(anchor)
+        self._anchor_id = anchor.id
+        return anchor
+
+    def _gain_range(self) -> tuple:
+        rng = self.gain_db_range
+        if rng is None:
+            return (-120.0, -40.0)
+        try:
+            return (float(rng[0]), float(rng[1]))
+        except Exception:  # noqa: BLE001 - vector2 may be None pre-init
+            return (-120.0, -40.0)
 
     def _resolve(self, field_name, component_name):
         # Use the referenced endpoint object if assigned; else the first matching one.

@@ -5,13 +5,13 @@ An ITU material's *identity* lives in its hidden ``itu_descriptor``
 ``eps_r`` / ``sigma_e`` (those are derived from the frequency at solve time). When a
 structure's material is an ITU preset, the adapter attaches this companion component
 (carrying the name + optional override) and exports it via ``Material.from_itu`` —
-the unified ``EMMaterial`` scalar fields are ignored for that structure.
+the unified ``Material`` scalar EM fields are ignored for that structure.
 
 ITU formula (``material_presets.py``): ``eps_r = a*f_GHz^b``, ``sigma_e = c*f_GHz^d``,
 ``mu_r = 1``; each preset is only defined over a frequency band (the platform raises
 outside it).
 """
-from witwin_server.components import (
+from witwin_server.core.components import (
     Component,
     bool_field,
     component,
