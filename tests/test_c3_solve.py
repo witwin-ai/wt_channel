@@ -220,8 +220,8 @@ def test_manifest_declares_rfc012_channel_solvers():
     solvers = {item["id"]: item for item in manifest["contributes"]["solvers"]}
     assert solvers["witwin.channel.radiomap"]["entry"] == "solver_host.py"
     assert solvers["witwin.channel.path"]["entry"] == "solver_host.py"
-    assert solvers["witwin.channel.radiomap"]["runtime"]["python"] == "${env:WITWIN_CHANNEL_PYTHON}"
-    assert solvers["witwin.channel.path"]["runtime"]["python"] == "${env:WITWIN_CHANNEL_PYTHON}"
+    assert solvers["witwin.channel.radiomap"]["runtime"]["python"] == "${backend:python}"
+    assert solvers["witwin.channel.path"]["runtime"]["python"] == "${backend:python}"
     assert solvers["witwin.channel.radiomap"]["maxParallel"] == 1
     assert solvers["witwin.channel.path"]["maxParallel"] == 1
 
