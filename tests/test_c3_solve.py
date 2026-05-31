@@ -270,8 +270,20 @@ def test_radiomap_component_uses_solver_api_for_solve(monkeypatch):
             }
 
     fake = FakeSolvers()
+    notifications = {"success": [], "error": []}
+
+    class FakeNotifications:
+        @staticmethod
+        def success(title, message):
+            notifications["success"].append((title, message))
+
+        @staticmethod
+        def error(title, message):
+            notifications["error"].append((title, message))
+
     monkeypatch.setattr(channel_adapter_mod.ChannelAdapter, "has_structures", staticmethod(lambda scene: True))
     monkeypatch.setattr(radiomap_mod, "api", type("FakeApi", (), {"solvers": fake})())
+    monkeypatch.setattr(radiomap_mod, "Notifications", FakeNotifications)
 
     msg = asyncio.run(comp.solve())
 
@@ -280,11 +292,13 @@ def test_radiomap_component_uses_solver_api_for_solve(monkeypatch):
     assert comp._solver_run_id == "map-run"
     assert fake.solve_kwargs["solver_id"] == "witwin.channel.radiomap"
     assert fake.solve_kwargs["scene"] is studio
-    assert fake.solve_kwargs["surface_progress"] is True
+    assert "surface_progress" not in fake.solve_kwargs
     assert fake.solve_kwargs["config"]["mode"] == "radiomap"
     assert fake.solve_kwargs["config"]["component"]["solver"] == "montecarlo"
     assert fake.solve_kwargs["config"]["component"]["mc_num_samples"] == 123
     assert fake.queries[0][2] == "extract_map"
+    assert notifications["success"] == [("Channel", "montecarlo radiomap solved")]
+    assert notifications["error"] == []
 
 
 # --- live solve (CUDA) ---------------------------------------------------------

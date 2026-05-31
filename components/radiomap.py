@@ -171,7 +171,6 @@ class RadioMapComponent(FieldComponent):
                 "witwin.channel.radiomap",
                 scene=scene,
                 config=self._solver_config(transmitter, self._owner.name),
-                surface_progress=True,
             )
             if run.status != "succeeded":
                 message = (run.error or {}).get("message") or "radiomap solve failed"

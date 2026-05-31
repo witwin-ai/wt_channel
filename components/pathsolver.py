@@ -114,7 +114,6 @@ class PathSolverComponent(Component):
                 "witwin.channel.path",
                 scene=scene,
                 config=self._solver_config(transmitter, receiver),
-                surface_progress=True,
             )
             if run.status != "succeeded":
                 message = (run.error or {}).get("message") or "path solve failed"

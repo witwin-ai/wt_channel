@@ -370,8 +370,20 @@ def test_path_solver_component_uses_solver_api_for_solve(monkeypatch):
 
     fake = FakeSolvers()
     fake_api = type("FakeApi", (), {"solvers": fake, "viewport": FakeViewport()})()
+    notifications = {"success": [], "error": []}
+
+    class FakeNotifications:
+        @staticmethod
+        def success(title, message):
+            notifications["success"].append((title, message))
+
+        @staticmethod
+        def error(title, message):
+            notifications["error"].append((title, message))
+
     monkeypatch.setattr(channel_adapter_mod.ChannelAdapter, "has_structures", staticmethod(lambda scene: True))
     monkeypatch.setattr(pathsolver_mod, "api", fake_api)
+    monkeypatch.setattr(pathsolver_mod, "Notifications", FakeNotifications)
 
     msg = asyncio.run(comp.solve())
 
@@ -380,10 +392,12 @@ def test_path_solver_component_uses_solver_api_for_solve(monkeypatch):
     assert comp._solver_run_id == "path-run"
     assert fake.solve_kwargs["solver_id"] == "witwin.channel.path"
     assert fake.solve_kwargs["scene"] is scene
-    assert fake.solve_kwargs["surface_progress"] is True
+    assert "surface_progress" not in fake.solve_kwargs
     assert fake.solve_kwargs["config"]["mode"] == "path"
     assert fake.solve_kwargs["config"]["component"]["num_samples"] == 321
     assert [q[2] for q in fake.queries] == ["plot", "ray_batch"]
+    assert notifications["success"] == [("Channel", "Path solve tx -> rx: 1 rays")]
+    assert notifications["error"] == []
 
 
 def test_solver_host_path_cache_matches_pathplots():
