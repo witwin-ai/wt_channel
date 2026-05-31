@@ -4,6 +4,8 @@ The path config builder and the CIR/CFR/taps + poly-line extractors are CPU-test
 against a synthetic ``PathResult`` (built from a payload, no solver). The live path
 solve (``test_live_*``) needs CUDA RayD/OptiX and is skipped otherwise.
 """
+import asyncio
+import io
 import numpy as np
 import pytest
 from witwin.core import Box, Material, Structure
@@ -301,6 +303,110 @@ def test_path_config_builder():
     assert config.max_diffraction_order == 2
     assert config.max_num_paths == 25
     assert config.return_geometry is True
+
+
+def test_path_solver_component_uses_solver_api_for_solve(monkeypatch):
+    import wt_channel.adapter.channel_adapter as channel_adapter_mod
+    import wt_channel.components.pathsolver as pathsolver_mod
+    from witwin_server.core import Scene, SceneObject as SO
+    from wt_channel.components.pathsolver import PathSolverComponent
+
+    scene = Scene()
+    host = SO(name="Path Solver", mesh_type="Empty")
+    scene.add_object(host)
+    comp = PathSolverComponent()
+    comp._owner = host
+    host._components["PathSolver"] = comp
+    comp.num_samples = 321
+    comp._resolve = lambda field, component: "tx" if component == "ChannelTx" else "rx"
+
+    batch_buf = io.BytesIO()
+    np.savez(
+        batch_buf,
+        segments=np.zeros((1, 2, 3), dtype=np.float32),
+        colors_type=np.zeros((1, 4), dtype=np.uint8),
+        colors_gain=np.zeros((1, 4), dtype=np.uint8),
+        types=np.zeros((1,), dtype=np.uint8),
+        path_index=np.zeros((1,), dtype=np.int32),
+    )
+
+    class FakeRun:
+        status = "succeeded"
+        outputs = {"resultHandle": "path-handle"}
+        run_id = "path-run"
+        error = None
+
+    class FakeSolvers:
+        def __init__(self):
+            self.solve_kwargs = None
+            self.queries = []
+
+        def solve(self, solver_id, **kwargs):
+            self.solve_kwargs = {"solver_id": solver_id, **kwargs}
+            return FakeRun()
+
+        def query(self, solver_id, result_handle, op, params, **kwargs):
+            self.queries.append((solver_id, result_handle, op, params, kwargs))
+            if op == "plot":
+                return {"data": {"x": np.array([0.0, 1.0]), "y": np.array([1.0, 0.5]), "kind": "line",
+                                  "xlabel": "x", "ylabel": "y", "title": "Plot"}}
+            return {"data": {"resultRef": {"path": "batch.npz", "contentHash": "sha256:" + "0" * 64},
+                              "segmentCount": 1}}
+
+        def read_result_ref(self, solver_id, ref):
+            assert solver_id == "witwin.channel.path"
+            return batch_buf.getvalue()
+
+    class FakeViewport:
+        def register_ray_batch(self, segments, **kwargs):
+            return {"asset_id": "r_path", "uri": "/x", "format": "witwin.raybatch.v1",
+                    "content_hash": "sha256:path", "segment_count": int(segments.shape[0])}
+
+        def set_render_spec(self, object_id, spec):
+            self.spec = spec
+
+        def clear_render_spec(self, object_id):
+            self.cleared = object_id
+
+    fake = FakeSolvers()
+    fake_api = type("FakeApi", (), {"solvers": fake, "viewport": FakeViewport()})()
+    monkeypatch.setattr(channel_adapter_mod.ChannelAdapter, "has_structures", staticmethod(lambda scene: True))
+    monkeypatch.setattr(pathsolver_mod, "api", fake_api)
+
+    msg = asyncio.run(comp.solve())
+
+    assert msg == "Path solve complete (1 rays)"
+    assert comp._solver_result_handle == "path-handle"
+    assert comp._solver_run_id == "path-run"
+    assert fake.solve_kwargs["solver_id"] == "witwin.channel.path"
+    assert fake.solve_kwargs["scene"] is scene
+    assert fake.solve_kwargs["surface_progress"] is True
+    assert fake.solve_kwargs["config"]["mode"] == "path"
+    assert fake.solve_kwargs["config"]["component"]["num_samples"] == 321
+    assert [q[2] for q in fake.queries] == ["plot", "ray_batch"]
+
+
+def test_solver_host_path_cache_matches_pathplots():
+    from wt_channel import solver_host
+    from wt_channel.adapter.path_solve import PathPlots
+
+    result = _synthetic_result()
+    cache = solver_host._path_cache(result)
+
+    cir = solver_host._cir_plot(cache, {})
+    ref_cir = PathPlots.cir(result)
+    np.testing.assert_allclose(cir["x"], ref_cir.x, atol=1e-6)
+    np.testing.assert_allclose(cir["y"], ref_cir.y, atol=1e-6)
+
+    cfr = solver_host._cfr_plot(cache, {})
+    ref_cfr = PathPlots.cfr(result)
+    np.testing.assert_allclose(cfr["x"], ref_cfr.x, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(cfr["y"], ref_cfr.y, rtol=3e-5, atol=1e-7)
+
+    taps = solver_host._taps_plot(cache, {"bandwidth": 100e6, "num_taps": 16})
+    ref_taps = PathPlots.taps(result, bandwidth=100e6, num_taps=16)
+    np.testing.assert_allclose(taps["x"], ref_taps.x, atol=1e-6)
+    np.testing.assert_allclose(taps["y"], ref_taps.y, rtol=1e-5, atol=1e-7)
 
 
 # --- live path solve (CUDA) ----------------------------------------------------

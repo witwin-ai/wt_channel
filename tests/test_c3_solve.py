@@ -6,6 +6,8 @@ library prefabs build correct studio objects that round-trip. The live solve
 (``test_live_*``) needs CUDA RayD/OptiX and is skipped otherwise — it must not be
 faked as passing.
 """
+import asyncio
+import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -168,7 +170,7 @@ def test_demo_prefab_roundtrips(adapter, wtc):
     from witwin_server import Scene as StudioScene
     from wt_channel import library_items
 
-    studio = StudioScene(kind="local")
+    studio = StudioScene()
     studio.begin_batch()
     ctx = SimpleNamespace(scene=studio, name="RadioMap")
     studio.add_object(library_items._make_demo(ctx))  # returns the RadioMap (primary)
@@ -211,6 +213,78 @@ def test_radiomap_plane_volume_orientation():
     for iz in range(2):
         for ix in range(3):
             assert vol[ix, 0, iz] == data[iz, ix]
+
+
+def test_manifest_declares_rfc012_channel_solvers():
+    manifest = json.loads((__import__("pathlib").Path(__file__).resolve().parents[1] / "witwin.manifest.json").read_text())
+    solvers = {item["id"]: item for item in manifest["contributes"]["solvers"]}
+    assert solvers["witwin.channel.radiomap"]["entry"] == "solver_host.py"
+    assert solvers["witwin.channel.path"]["entry"] == "solver_host.py"
+    assert solvers["witwin.channel.radiomap"]["runtime"]["python"] == "${env:WITWIN_CHANNEL_PYTHON}"
+    assert solvers["witwin.channel.path"]["runtime"]["python"] == "${env:WITWIN_CHANNEL_PYTHON}"
+    assert solvers["witwin.channel.radiomap"]["maxParallel"] == 1
+    assert solvers["witwin.channel.path"]["maxParallel"] == 1
+
+
+def test_radiomap_component_uses_solver_api_for_solve(monkeypatch):
+    import wt_channel.adapter.channel_adapter as channel_adapter_mod
+    import wt_channel.components.radiomap as radiomap_mod
+    from witwin_server.core import Scene, SceneObject as SO
+    from wt_channel.components.radiomap import RadioMapComponent
+
+    studio = Scene()
+    host = SO(name="rmap", mesh_type="Empty")
+    tx = SO(name="tx", mesh_type="Empty")
+    studio.add_object(host)
+    studio.add_object(tx)
+    comp = RadioMapComponent()
+    comp._owner = host
+    host._components["RadioMap"] = comp
+    tx._components["ChannelTx"] = object()
+    comp.solver = "montecarlo"
+    comp.mc_num_samples = 123
+
+    class FakeRun:
+        status = "succeeded"
+        outputs = {"resultHandle": "map-handle"}
+        run_id = "map-run"
+        error = None
+
+    class FakeSolvers:
+        def __init__(self):
+            self.solve_kwargs = None
+            self.queries = []
+
+        def solve(self, solver_id, **kwargs):
+            self.solve_kwargs = {"solver_id": solver_id, **kwargs}
+            return FakeRun()
+
+        def query(self, solver_id, result_handle, op, params, **kwargs):
+            self.queries.append((solver_id, result_handle, op, params, kwargs))
+            return {
+                "data": {
+                    "data": np.ones((2, 3), dtype=np.float32),
+                    "extent": [-1.0, 1.0, -1.0, 1.0],
+                    "label": "path_gain",
+                }
+            }
+
+    fake = FakeSolvers()
+    monkeypatch.setattr(channel_adapter_mod.ChannelAdapter, "has_structures", staticmethod(lambda scene: True))
+    monkeypatch.setattr(radiomap_mod, "api", type("FakeApi", (), {"solvers": fake})())
+
+    msg = asyncio.run(comp.solve())
+
+    assert msg == "Solve complete"
+    assert comp._solver_result_handle == "map-handle"
+    assert comp._solver_run_id == "map-run"
+    assert fake.solve_kwargs["solver_id"] == "witwin.channel.radiomap"
+    assert fake.solve_kwargs["scene"] is studio
+    assert fake.solve_kwargs["surface_progress"] is True
+    assert fake.solve_kwargs["config"]["mode"] == "radiomap"
+    assert fake.solve_kwargs["config"]["component"]["solver"] == "montecarlo"
+    assert fake.solve_kwargs["config"]["component"]["mc_num_samples"] == 123
+    assert fake.queries[0][2] == "extract_map"
 
 
 # --- live solve (CUDA) ---------------------------------------------------------

@@ -38,7 +38,7 @@ class ChannelAdapter:
 
     def to_studio(self, scene: Any) -> Scene:
         """Translate a ``channel.Scene`` into a studio ``Scene`` (batched)."""
-        studio = Scene(kind="local")
+        studio = Scene()
         studio.begin_batch()
         frequency = scene.frequency
         device = device_name(scene.device)

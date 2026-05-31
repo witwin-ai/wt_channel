@@ -12,9 +12,11 @@ field's own plane data — the radiomap shows as the colored 2D plane inside its
 
 Live solve needs CUDA RayD/OptiX (the round-trip / config tests run on CPU).
 """
+import asyncio
+
 import numpy as np
 
-from witwin_server import Notifications
+from witwin_server import Notifications, api
 from witwin_server.core.components import (
     bool_field,
     button,
@@ -28,8 +30,7 @@ from witwin_server.core.components import (
 from witwin_server.core.components.field_region import FREQUENCY_UNITS, FieldComponent
 from witwin_server.features.platform.bridge import FieldViz
 
-from ..adapter.common import num
-from ..adapter.solve import RadioMapExtractor, SolveRunner
+from ..adapter.solve import RadioMapExtractor
 from .category import CATEGORY
 
 _DET = {"field_name": "solver", "operator": "eq", "value": "deterministic"}
@@ -52,6 +53,8 @@ class RadioMapComponent(FieldComponent):
     """A 2D ``Field`` that solves a channel radiomap and shows it as its plane."""
 
     _result = None   # runtime RadioMapResult (never serialized)
+    _solver_result_handle = ""
+    _solver_run_id = ""
 
     # --- lock the inherited Field to a 2D XZ-plane solvable grid ---
     dimension = string_field("2D", options=["2D", "3D"], hidden=True)
@@ -151,10 +154,7 @@ class RadioMapComponent(FieldComponent):
 
     @button(display_name="Solve", group=_SCENE)
     async def solve(self):
-        import asyncio
-
         from ..adapter.channel_adapter import ChannelAdapter
-        from ..adapter.offload import run_off_loop
 
         scene = self._owner.scene
         transmitter = self._resolve_transmitter(scene)
@@ -166,9 +166,24 @@ class RadioMapComponent(FieldComponent):
                                 "(e.g. a ground plane or building). Add geometry to the scene.")
             return "No structures in scene"
         try:
-            # Off the event loop so it stays free to deliver the result broadcasts.
-            self._result = await run_off_loop(SolveRunner.run, scene, self,
-                                              transmitter=transmitter, receiver=self._owner.name)
+            run = await asyncio.to_thread(
+                api.solvers.solve,
+                "witwin.channel.radiomap",
+                scene=scene,
+                config=self._solver_config(transmitter, self._owner.name),
+                surface_progress=True,
+            )
+            if run.status != "succeeded":
+                message = (run.error or {}).get("message") or "radiomap solve failed"
+                Notifications.error("Channel", message)
+                return f"Solve failed: {message}"
+            handle = (run.outputs or {}).get("resultHandle")
+            if not handle:
+                Notifications.error("Channel", "Solver returned no result handle")
+                return "Solve failed: no result handle"
+            self._solver_result_handle = str(handle)
+            self._solver_run_id = run.run_id
+            self._result = None
             self.update_map()
         except Exception as exc:  # noqa: BLE001 - GPU solver boundary: notify, don't crash the button
             Notifications.error("Channel", f"{self.solver} solve failed: {exc}")
@@ -179,16 +194,28 @@ class RadioMapComponent(FieldComponent):
 
     @button(display_name="Update Map", group=_SCENE)
     def update_map(self):
-        if self._result is None:
+        if self._solver_result_handle:
+            payload = self._query_result("extract_map", {
+                "metric": str(self.metric),
+                "tx_index": int(self.tx_index),
+                "bounds": [0.0, 1.0, 0.0, 1.0],
+                "log_scale": bool(self.log_scale),
+            })
+            data = np.asarray(payload["data"], dtype=np.float32)
+            label = payload.get("label") or str(self.metric)
+        elif self._result is None:
             return "Solve first"
-        img = RadioMapExtractor.extract(self._result, metric=str(self.metric),
-                                        tx_index=int(self.tx_index), bounds=[0.0, 1.0, 0.0, 1.0],
-                                        log_scale=bool(self.log_scale))
-        self.set_volume_data(self._to_plane_volume(img.data))  # normalizes + sets resolution
+        else:
+            img = RadioMapExtractor.extract(self._result, metric=str(self.metric),
+                                            tx_index=int(self.tx_index), bounds=[0.0, 1.0, 0.0, 1.0],
+                                            log_scale=bool(self.log_scale))
+            data = img.data
+            label = img.label
+        self.set_volume_data(self._to_plane_volume(data))  # normalizes + sets resolution
         self.set_field("render_mode", "Slices", force=True)
         self.export_volume_data()                              # caches -> volume_id -> plane shows
         if bool(self.send_to_results):
-            FieldViz.show_2d(img.data, title=img.label)
+            FieldViz.show_2d(data, title=label)
         return "Map updated"
 
     def _to_plane_volume(self, data2d: np.ndarray) -> np.ndarray:
@@ -218,3 +245,39 @@ class RadioMapComponent(FieldComponent):
             if obj.get_component(TX_COMPONENT) is not None:
                 return obj.name
         return None
+
+    def _query_result(self, op: str, params: dict):
+        response = api.solvers.query(
+            "witwin.channel.radiomap",
+            self._solver_result_handle,
+            op,
+            params,
+            run_id=self._solver_run_id or None,
+        )
+        return response.get("data") or {}
+
+    def _solver_config(self, transmitter: str, receiver: str) -> dict:
+        return {
+            "mode": "radiomap",
+            "transmitter": transmitter,
+            "receiver": receiver,
+            "component": self._component_config(),
+        }
+
+    def _component_config(self) -> dict:
+        keys = (
+            "frequency", "use_noise_power", "noise_power", "device", "solver",
+            "det_metric", "det_num_samples", "det_max_bounces", "det_max_diffraction_order",
+            "det_quadrature_mode", "det_samples_per_cell", "det_shadow_boundary_correction",
+            "det_synthetic_array", "det_resolution_wavelength", "det_solver_mode",
+            "det_memory_profile", "det_reflection_field_backend",
+            "mc_num_samples", "mc_max_bounces", "mc_max_diffraction_order",
+            "mc_synthetic_array", "mc_integrator", "mc_samples_per_tx", "mc_seed",
+            "mc_bdpt_diffraction_sampling", "mc_use_rr_depth", "mc_rr_depth",
+            "mc_use_rr_prob", "mc_rr_prob", "mc_use_stop_threshold", "mc_stop_threshold",
+            "mc_use_filtering", "mc_filter_method", "mc_filter_radius", "mc_filter_sigma",
+            "mc_filter_blend", "mc_resolution_wavelength", "mc_solver_mode",
+            "mc_memory_profile", "mc_reflection_field_backend",
+            "ep_vertical_ratio", "ep_edge_selection_mode", "ep_edge_diffraction",
+        )
+        return {key: getattr(self, key) for key in keys}

@@ -76,7 +76,7 @@ def test_export_empty_scene_is_empty(adapter):
     # Config now rides RadioMap / PathSolver; an empty studio scene exports an empty
     # channel scene (default frequency) rather than raising.
     from witwin_server import Scene as StudioScene
-    empty = StudioScene(kind="local")
+    empty = StudioScene()
     scene = adapter.to_platform(empty)
     assert list(scene.structures) == []
     assert list(scene.transmitters) == []
