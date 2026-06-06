@@ -13,7 +13,8 @@ import io
 
 import numpy as np
 
-from witwin_server import Notifications, SceneObject, api
+from witwin_server import Notifications, SceneObject
+from witwin_server.api import api
 from witwin_server.core.components import (
     Component,
     bool_field,
@@ -28,6 +29,7 @@ from witwin_server.core.components import (
 )
 from witwin_server.core.components import RenderSpec, ray_batch_geometry, ray_batch_material
 
+from ..adapter.common import json_value
 from ..adapter.path_solve import PathLineBuilder, PathPlots, PathSolveRunner, PlotData, RayBatch
 from .category import CATEGORY
 
@@ -88,7 +90,8 @@ class PathSolverComponent(Component):
     num_taps = int_field(64, min=1, show_if=_TAPS)
     path_figure = figure(title="Channel Response")
 
-    @button(display_name="Solve Paths")
+    @button(display_name="Solve Paths", operation="solver", cancellable=True,
+            progress_surface="component")
     async def solve(self):
         from ..adapter.channel_adapter import ChannelAdapter
 
@@ -312,7 +315,7 @@ class PathSolverComponent(Component):
             "num_samples", "max_bounces", "max_diffraction_order",
             "use_max_num_paths", "max_num_paths", "synthetic_array", "draw_paths",
         )
-        return {key: getattr(self, key) for key in keys}
+        return {key: json_value(getattr(self, key)) for key in keys}
 
     def _publish_plot(self, data):
         """Main-thread: update the figure from a pure-numpy PlotData."""

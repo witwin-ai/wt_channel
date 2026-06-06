@@ -17,6 +17,21 @@ def vec(value: Any) -> List[float]:
     return [float(v) for v in seq]
 
 
+def json_value(value: Any) -> Any:
+    """Component/runtime value -> JSON-serializable Python value."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): json_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [json_value(v) for v in value]
+    if hasattr(value, "tolist"):
+        return json_value(value.tolist())
+    if hasattr(value, "item"):
+        return json_value(value.item())
+    return value
+
+
 def device_name(raw: Any) -> str:
     """Normalize a torch/string device ('cuda:0', device(...)) -> 'cuda' | 'cpu'."""
     return "cuda" if str(raw).startswith("cuda") else "cpu"

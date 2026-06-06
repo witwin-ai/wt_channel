@@ -71,7 +71,7 @@ surface: the viewport border/handle gizmo (`FieldGizmo`, matched by `min_bound`/
 `max_bound`) and the 2D plane visualizer (`FieldVisualizer`, matched by
 `inheritsFrom('Field')` via the backend `base_classes`). The Field region is the receiver
 grid in the object's local frame (so the grid follows the Transform), and `Solve` writes
-the solved metric into the field's plane data (`set_volume_data` -> `volume_id`,
+the solved metric into the field's plane data (`set_volume_data` -> `volume`,
 `render_mode=Slices`) so the radiomap renders as the colored plane. Tx/Rx draw their own
 marker gizmos via `on_draw_gizmos`. The exact plane orientation / colormap mapping is
 wired to Field conventions but has not been visually verified in a running viewport.

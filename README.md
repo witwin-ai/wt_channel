@@ -31,7 +31,7 @@ PathSolver, and are discovered from them on export.
 
 ```
 wt_channel/
-  witwin.manifest.json   plugin manifest (id witwin.channel; engines/contributes)
+  witwin.toml   plugin manifest (id witwin.channel; engines/contributes)
   __init__.py            registers components + the "channel" adapter
   components/            endpoints (Tx/Rx), radiomap, pathsolver, materials
   adapter/               ChannelAdapter + material/endpoint/array maps + solve/path

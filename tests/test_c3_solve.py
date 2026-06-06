@@ -8,6 +8,10 @@ faked as passing.
 """
 import asyncio
 import json
+import tomllib
+import shutil
+import sys
+import uuid
 from types import SimpleNamespace
 
 import numpy as np
@@ -216,7 +220,7 @@ def test_radiomap_plane_volume_orientation():
 
 
 def test_manifest_declares_rfc012_channel_solvers():
-    manifest = json.loads((__import__("pathlib").Path(__file__).resolve().parents[1] / "witwin.manifest.json").read_text())
+    manifest = tomllib.loads((__import__("pathlib").Path(__file__).resolve().parents[1] / "witwin.toml").read_text())
     solvers = {item["id"]: item for item in manifest["contributes"]["solvers"]}
     assert solvers["witwin.channel.radiomap"]["entry"] == "solver_host.py"
     assert solvers["witwin.channel.path"]["entry"] == "solver_host.py"
@@ -224,6 +228,27 @@ def test_manifest_declares_rfc012_channel_solvers():
     assert solvers["witwin.channel.path"]["runtime"]["python"] == "${backend:python}"
     assert solvers["witwin.channel.radiomap"]["maxParallel"] == 1
     assert solvers["witwin.channel.path"]["maxParallel"] == 1
+
+
+def test_radiomap_component_imports_api_facade_after_api_submodule_loaded():
+    import importlib
+    from witwin_server.api import WitwinApi
+    import witwin_server.api as api_submodule
+    import wt_channel.components.radiomap as radiomap_mod
+
+    reloaded = importlib.reload(radiomap_mod)
+
+    assert reloaded.api is not api_submodule
+    assert isinstance(reloaded.api, WitwinApi)
+    assert hasattr(reloaded.api, "solvers")
+
+
+def test_radiomap_solver_config_is_json_serializable():
+    from wt_channel.components.radiomap import RadioMapComponent
+
+    config = RadioMapComponent()._solver_config("tx", "rmap")
+
+    json.dumps(config)
 
 
 def test_radiomap_component_uses_solver_api_for_solve(monkeypatch):
@@ -345,3 +370,53 @@ def test_live_montecarlo_matches_direct(adapter, mc_ready):
     ref = ch.montecarlo.solve(scene=_live_scene(), transmitter="tx", receiver="rmap")
     assert tuple(result.grid_shape) == tuple(ref.grid_shape) == (16, 16)
     assert got.shape == (16, 16) and np.isfinite(got).any()
+
+
+def test_live_radiomap_solver_host_solves_and_queries(adapter, mc_ready):
+    """Exercise the real RFC-012 child process path for radiomap solve + query."""
+    from pathlib import Path
+    from witwin_server.features.runs.store import RunStore
+    from witwin_server.features.solvers.host import SolverHost
+    from witwin_server.features.solvers.scene_ref import make_scene_ref
+    from witwin_server.features.solvers.spec import SolverSpec
+
+    plugin_root = Path(__file__).resolve().parents[1]
+    manifest = tomllib.loads((plugin_root / "witwin.toml").read_text())
+    item = next(s for s in manifest["contributes"]["solvers"]
+                if s["id"] == "witwin.channel.radiomap")
+    spec = SolverSpec.from_manifest(
+        "witwin.channel",
+        plugin_root,
+        {**item, "runtime": {"python": sys.executable}},
+    )
+    work_dir = (Path.cwd() / ".pytest_tmp_wt_channel" / f"radiomap-host-{uuid.uuid4().hex}").resolve()
+    work_dir.mkdir(parents=True, exist_ok=True)
+    host = SolverHost(spec, RunStore(work_dir / "runs.db"))
+    try:
+        studio = adapter.to_studio(_live_scene())
+        comp = studio.get_object_by_name("rmap").get_component("RadioMap")
+        comp.solver = "montecarlo"
+        comp.mc_num_samples = 128
+        comp.mc_samples_per_tx = 2048
+        comp.mc_max_bounces = 1
+        comp.mc_max_diffraction_order = 0
+
+        final = host.solve(
+            scene_ref=make_scene_ref(studio),
+            config=comp._solver_config("tx", "rmap"),
+        )
+
+        assert final.status == "succeeded", final.error
+        handle = final.outputs["resultHandle"]
+        queried = host.query(
+            handle,
+            "extract_map",
+            {"metric": "path_gain", "tx_index": 0, "log_scale": True},
+            run_id=final.run_id,
+        )
+        data = np.asarray(queried["data"]["data"], dtype=np.float32)
+        assert data.shape == (16, 16)
+        assert np.isfinite(data).any()
+    finally:
+        host.shutdown(force=True)
+        shutil.rmtree(work_dir, ignore_errors=True)

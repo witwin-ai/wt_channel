@@ -264,4 +264,4 @@ def _ray_batch_from_cache(result: PathCache, params) -> RayBatch:
 
 
 if __name__ == "__main__":
-    serve(solve)
+    serve(solve, threaded_solve=False)

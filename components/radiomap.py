@@ -16,7 +16,8 @@ import asyncio
 
 import numpy as np
 
-from witwin_server import Notifications, api
+from witwin_server import Notifications
+from witwin_server.api import api
 from witwin_server.core.components import (
     bool_field,
     button,
@@ -30,6 +31,7 @@ from witwin_server.core.components import (
 from witwin_server.core.components.field_region import FREQUENCY_UNITS, FieldComponent
 from witwin_server.features.platform.bridge import FieldViz
 
+from ..adapter.common import json_value
 from ..adapter.solve import RadioMapExtractor
 from .category import CATEGORY
 
@@ -152,7 +154,8 @@ class RadioMapComponent(FieldComponent):
     ep_edge_diffraction = string_field("default", options=["default", "on", "off"], group=_EDGE,
                                        description="Boundary-edge diffraction (default lets the solver decide).")
 
-    @button(display_name="Solve", group=_SCENE)
+    @button(display_name="Solve", group=_SCENE, operation="solver", cancellable=True,
+            progress_surface="component")
     async def solve(self):
         from ..adapter.channel_adapter import ChannelAdapter
 
@@ -212,7 +215,7 @@ class RadioMapComponent(FieldComponent):
             label = img.label
         self.set_volume_data(self._to_plane_volume(data))  # normalizes + sets resolution
         self.set_field("render_mode", "Slices", force=True)
-        self.export_volume_data()                              # caches -> volume_id -> plane shows
+        self.export_volume_data()                              # caches -> volume resource -> plane shows
         if bool(self.send_to_results):
             FieldViz.show_2d(data, title=label)
         return "Map updated"
@@ -279,4 +282,4 @@ class RadioMapComponent(FieldComponent):
             "mc_memory_profile", "mc_reflection_field_backend",
             "ep_vertical_ratio", "ep_edge_selection_mode", "ep_edge_diffraction",
         )
-        return {key: getattr(self, key) for key in keys}
+        return {key: json_value(getattr(self, key)) for key in keys}

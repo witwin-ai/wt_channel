@@ -1,0 +1,46 @@
+id = "witwin.channel"
+name = "Channel (Radiomap)"
+version = "0.1.0"
+author = ""
+description = "Round-trips witwin.channel solver scenes <-> the studio editor (structures, endpoints, antenna arrays, ITU materials) and runs the deterministic and Monte Carlo solvers with 2D radiomap visualization."
+license = "GPL-3.0-or-later"
+dependencies = ["scipy", "numpy"]
+icon = "radio"
+enabled = true
+
+[engines]
+witwin = "^1.0.0"
+
+[[contributes.solvers]]
+id = "witwin.channel.radiomap"
+title = "Channel RadioMap"
+entry = "solver_host.py"
+lifecycle = "warm"
+idleTimeoutSec = 300
+cancelGraceSec = 5
+maxParallel = 1
+
+[contributes.solvers.runtime]
+python = "${backend:python}"
+
+[contributes.solvers.capabilities]
+cancel = true
+partials = true
+query = ["extract_map"]
+
+[[contributes.solvers]]
+id = "witwin.channel.path"
+title = "Channel Path Solver"
+entry = "solver_host.py"
+lifecycle = "warm"
+idleTimeoutSec = 300
+cancelGraceSec = 5
+maxParallel = 1
+
+[contributes.solvers.runtime]
+python = "${backend:python}"
+
+[contributes.solvers.capabilities]
+cancel = true
+partials = true
+query = ["plot", "ray_batch"]
