@@ -170,6 +170,28 @@ def test_library_items_registered(wtc):
             "channel_pathsolver"} <= names
 
 
+def test_demo_prefab_does_not_import_channel_platform(monkeypatch, wtc):
+    import builtins
+    from witwin_server import Scene as StudioScene
+    from wt_channel import library_items
+
+    original_import = builtins.__import__
+
+    def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "witwin.channel" or name == "witwin.core" or name.startswith("witwin.channel."):
+            raise AssertionError(f"demo prefab imported platform package: {name}")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    studio = StudioScene()
+    ctx = SimpleNamespace(scene=studio, name="RadioMap")
+
+    obj = library_items._make_demo(ctx)
+
+    assert obj.name == "RadioMap"
+    assert {item.name for item in studio.objects.values()} == {"Channel Ground", "Tx", "Rx", "Path Solver"}
+
+
 def test_demo_prefab_roundtrips(adapter, wtc):
     from witwin_server import Scene as StudioScene
     from wt_channel import library_items

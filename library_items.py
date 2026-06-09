@@ -53,16 +53,18 @@ def _pathsolver_object(name):
 
 
 def _ground_object():
-    import witwin.channel as ch  # noqa: F401  (ensures the channel material API is importable)
-    from witwin.core import Box, Material, Structure
-    from witwin_server.features.platform.bridge import StructureMap
+    from witwin_server.core.components.platform_geometry import PlatformGeometryComponent
 
-    from .adapter.material_map import ChannelMaterialMap
+    from .components.materials import MaterialPresetComponent
 
-    obj = StructureMap.to_studio(Structure(
-        Box(size=(20.0, 0.2, 20.0), position=(0.0, 0.0, 0.0)),  # horizontal slab (Y up)
-        Material.from_itu("concrete"), name="Channel Ground"))
-    ChannelMaterialMap.overlay_studio(obj, Material.from_itu("concrete"))
+    obj = SceneObject(name="Channel Ground", mesh_type="Cube")
+    transform = obj.get_component("Transform")
+    transform.scale = [20.0, 0.2, 20.0]
+    geom = obj.add_component(PlatformGeometryComponent())
+    geom.kind = "box"
+    geom.size = [20.0, 0.2, 20.0]
+    preset = obj.add_component(MaterialPresetComponent())
+    preset.preset = "concrete"
     return obj
 
 
