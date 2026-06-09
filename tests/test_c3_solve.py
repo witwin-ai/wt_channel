@@ -76,6 +76,7 @@ def test_montecarlo_config_maps_fields_and_integrator():
     comp.mc_use_rr_depth = True
     comp.mc_rr_depth = 3
     comp.mc_bdpt_diffraction_sampling = "hash"
+    comp.mc_accumulation_backend = "rayd_reflection_accumulation"
     config = ConfigBuilder.montecarlo(ch, comp)
     assert isinstance(config, ch.montecarlo.Config)
     assert config.num_samples == 2048
@@ -85,6 +86,30 @@ def test_montecarlo_config_maps_fields_and_integrator():
     assert config.integrator_options.seed == 7
     assert config.integrator_options.rr_depth == 3
     assert config.integrator_options.bdpt_diffraction_sampling == "hash"
+    assert config.integrator_options.accumulation_backend == "rayd_reflection_accumulation"
+
+
+def test_montecarlo_legacy_config_uses_rayd_accumulation_default():
+    import witwin.channel as ch
+    from wt_channel.adapter.solve import ConfigBuilder
+
+    comp = _result_component()
+    legacy = SimpleNamespace(**{
+        name: getattr(comp, name)
+        for name in (
+            "mc_resolution_wavelength", "mc_solver_mode", "mc_memory_profile",
+            "mc_reflection_field_backend", "mc_integrator", "mc_max_diffraction_order",
+            "mc_samples_per_tx", "mc_seed", "mc_use_rr_depth", "mc_rr_depth",
+            "mc_use_rr_prob", "mc_rr_prob", "mc_use_stop_threshold", "mc_stop_threshold",
+            "mc_bdpt_diffraction_sampling", "mc_num_samples", "mc_max_bounces",
+            "mc_synthetic_array", "mc_use_filtering", "ep_vertical_ratio",
+            "ep_edge_selection_mode", "ep_edge_diffraction",
+        )
+    })
+
+    config = ConfigBuilder.montecarlo(ch, legacy)
+
+    assert config.integrator_options.accumulation_backend == "rayd_reflection_accumulation"
 
 
 def test_montecarlo_basic_clamps_diffraction_order():

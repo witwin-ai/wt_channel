@@ -34,6 +34,13 @@ class MapImage:
 class ConfigBuilder:
     """Read the ``ChannelResult`` component into platform solver configs."""
 
+    _MC_ACCUMULATION_DEFAULT = "rayd_reflection_accumulation"
+
+    @staticmethod
+    def _str_field(comp: Any, name: str, default: str) -> str:
+        value = getattr(comp, name, None)
+        return default if value is None or value == "" else str(value)
+
     @staticmethod
     def edge_policy(ch: Any, comp: Any) -> Any:
         # Shared diffraction-edge policy; edge_diffraction 'default' leaves it to the platform.
@@ -56,7 +63,8 @@ class ConfigBuilder:
             resolution_wavelength=num(comp.det_resolution_wavelength),
             solver_mode=str(comp.det_solver_mode),
             memory_profile=str(comp.det_memory_profile),
-            reflection_field_backend=str(comp.det_reflection_field_backend),
+            reflection_field_backend=ConfigBuilder._str_field(
+                comp, "det_reflection_field_backend", "drjit"),
         )
         return ch.deterministic.Config(
             metric=str(comp.det_metric),
@@ -82,7 +90,8 @@ class ConfigBuilder:
             resolution_wavelength=num(comp.mc_resolution_wavelength),
             solver_mode=str(comp.mc_solver_mode),
             memory_profile=str(comp.mc_memory_profile),
-            reflection_field_backend=str(comp.mc_reflection_field_backend),
+            reflection_field_backend=ConfigBuilder._str_field(
+                comp, "mc_reflection_field_backend", "drjit"),
         )
         options = ch.montecarlo.IntegratorOptions(
             integrator=integrator,
@@ -92,6 +101,8 @@ class ConfigBuilder:
             rr_prob=num(comp.mc_rr_prob) if bool(comp.mc_use_rr_prob) else None,
             stop_threshold=num(comp.mc_stop_threshold) if bool(comp.mc_use_stop_threshold) else None,
             bdpt_diffraction_sampling=str(comp.mc_bdpt_diffraction_sampling),
+            accumulation_backend=ConfigBuilder._str_field(
+                comp, "mc_accumulation_backend", ConfigBuilder._MC_ACCUMULATION_DEFAULT),
         )
         return ch.montecarlo.Config(
             num_samples=int(comp.mc_num_samples),

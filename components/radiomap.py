@@ -118,7 +118,7 @@ class RadioMapComponent(FieldComponent):
                                    group=_DET_TUNING, show_if=_DET)
     det_memory_profile = string_field("default", options=["default", "memory_safe"],
                                       group=_DET_TUNING, show_if=_DET)
-    det_reflection_field_backend = string_field("native", options=["drjit", "native"],
+    det_reflection_field_backend = string_field("drjit", options=["drjit", "native"],
                                                 group=_DET_TUNING, show_if=_DET)
 
     # --- monte carlo config ---
@@ -134,6 +134,11 @@ class RadioMapComponent(FieldComponent):
     mc_seed = int_field(0, min=0, group=_MC_INTEGRATOR, show_if=_MC)
     mc_bdpt_diffraction_sampling = string_field("sobol", options=["hash", "sobol"],
                                                 group=_MC_INTEGRATOR, show_if=_MC)
+    mc_accumulation_backend = string_field("rayd_reflection_accumulation",
+                                           options=["auto", "native_monte_carlo",
+                                                    "rayd_reflection_accumulation"],
+                                           group=_MC_INTEGRATOR, show_if=_MC,
+                                           description="Basic integrator accumulation backend.")
     mc_use_rr_depth = bool_field(False, group=_MC_INTEGRATOR, show_if=_MC, title="Russian roulette")
     mc_rr_depth = int_field(0, min=0, group=_MC_INTEGRATOR, show_if="mc_use_rr_depth")
     mc_use_rr_prob = bool_field(False, group=_MC_INTEGRATOR, show_if=_MC)
@@ -152,7 +157,7 @@ class RadioMapComponent(FieldComponent):
                                   group=_MC_TUNING, show_if=_MC)
     mc_memory_profile = string_field("default", options=["default", "memory_safe"],
                                      group=_MC_TUNING, show_if=_MC)
-    mc_reflection_field_backend = string_field("native", options=["drjit", "native"],
+    mc_reflection_field_backend = string_field("drjit", options=["drjit", "native"],
                                                group=_MC_TUNING, show_if=_MC)
 
     # --- shared edge policy ---
@@ -284,7 +289,8 @@ class RadioMapComponent(FieldComponent):
             "det_memory_profile", "det_reflection_field_backend",
             "mc_num_samples", "mc_max_bounces", "mc_max_diffraction_order",
             "mc_synthetic_array", "mc_integrator", "mc_samples_per_tx", "mc_seed",
-            "mc_bdpt_diffraction_sampling", "mc_use_rr_depth", "mc_rr_depth",
+            "mc_bdpt_diffraction_sampling", "mc_accumulation_backend",
+            "mc_use_rr_depth", "mc_rr_depth",
             "mc_use_rr_prob", "mc_rr_prob", "mc_use_stop_threshold", "mc_stop_threshold",
             "mc_use_filtering", "mc_filter_method", "mc_filter_radius", "mc_filter_sigma",
             "mc_filter_blend", "mc_resolution_wavelength", "mc_solver_mode",
