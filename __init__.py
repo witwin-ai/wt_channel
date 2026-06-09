@@ -14,6 +14,10 @@ on a machine without the channel solver (drjit / CUDA RayD) installed. The share
 base layer (``witwin_server.features.platform.bridge`` + the unified ``Material``
 component) is in core and frozen; this plugin only reads/writes it.
 """
+from ._compat import apply_platform_compat
+
+apply_platform_compat()
+
 from witwin_server.features.platform.scene_handlers import PlatformSceneHandler
 
 from . import components  # noqa: F401  (side-effect: registers channel components)

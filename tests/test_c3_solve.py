@@ -170,6 +170,17 @@ def test_library_items_registered(wtc):
             "channel_pathsolver"} <= names
 
 
+def test_platform_compat_restores_getargspec(monkeypatch):
+    import inspect
+    from wt_channel._compat import apply_platform_compat
+
+    monkeypatch.delattr(inspect, "getargspec", raising=False)
+
+    apply_platform_compat()
+
+    assert inspect.getargspec is inspect.getfullargspec
+
+
 def test_demo_prefab_does_not_import_channel_platform(monkeypatch, wtc):
     import builtins
     from witwin_server import Scene as StudioScene
