@@ -65,6 +65,44 @@ def test_receiver_grid_cell_size_resolves_to_counts(adapter):
     assert rebuilt.cell_size is None
 
 
+def test_radiomap_resolution_mode_defaults_to_256_grid_shape():
+    import witwin.channel as ch
+    from witwin_server.core import SceneObject
+    from wt_channel.adapter.endpoint_map import EndpointMap
+    from wt_channel.components.radiomap import RadioMapComponent
+
+    obj = SceneObject(name="rm", mesh_type="Empty")
+    comp = obj.add_component(RadioMapComponent())
+
+    grid = EndpointMap.radiomap_to_platform(ch, obj)
+
+    assert str(comp.grid_mode) == "Resolution"
+    np.testing.assert_allclose(np.asarray(comp.resolution, dtype=np.float32), [256.0, 1.0, 256.0])
+    assert grid.grid_shape == (256, 256)
+    assert grid.cell_size is None
+
+
+def test_radiomap_ppw_mode_derives_grid_shape_from_bounds_and_wavelength():
+    import witwin.channel as ch
+    from witwin_server.core import SceneObject
+    from wt_channel.adapter.endpoint_map import EndpointMap
+    from wt_channel.components.radiomap import RadioMapComponent
+
+    obj = SceneObject(name="rm", mesh_type="Empty")
+    comp = obj.add_component(RadioMapComponent())
+    comp.grid_mode = "PPW"
+    comp.points_per_wavelength = 4.0
+    comp.frequency = 299792458.0
+    comp.min_bound = [-10.0, 0.0, -5.0]
+    comp.max_bound = [10.0, 0.0, 5.0]
+
+    grid = EndpointMap.radiomap_to_platform(ch, obj)
+
+    assert grid.bounds == ((-10.0, 10.0), (-5.0, 5.0))
+    assert grid.grid_shape == (80, 40)
+    assert grid.cell_size is None
+
+
 def test_ula_array_roundtrip(adapter):
     import witwin.channel as ch
     tx = ch.Transmitter(name="tx", position=(0, 0, 2),

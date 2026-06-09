@@ -23,9 +23,11 @@ from witwin_server.core.components import (
     button,
     component,
     component_field,
+    define_group,
     float_field,
     int_field,
     string_field,
+    tab_group,
     vector3_field,
 )
 from witwin_server.core.components.field_region import FREQUENCY_UNITS, FieldComponent
@@ -39,6 +41,7 @@ _DET = {"field_name": "solver", "operator": "eq", "value": "deterministic"}
 _MC = {"field_name": "solver", "operator": "eq", "value": "montecarlo"}
 _STRAT = {"field_name": "det_quadrature_mode", "operator": "eq", "value": "stratified_fixed_n"}
 _SCENE = "Channel"
+_GRID = "Grid"
 _DET_TUNING = "Deterministic Tuning"
 _MC_INTEGRATOR = "Monte Carlo Integrator"
 _MC_FILTER = "Monte Carlo Filtering"
@@ -53,6 +56,8 @@ PLANE_AXES = {"XY": (2, 0, 1), "XZ": (1, 0, 2), "YZ": (0, 1, 2)}
 @component(name="RadioMap", display_name="RadioMap", category=CATEGORY)
 class RadioMapComponent(FieldComponent):
     """A 2D ``Field`` that solves a channel radiomap and shows it as its plane."""
+
+    define_group(tab_group(_GRID, "Resolution", "PPW", display_name="Grid", sync_field="grid_mode"))
 
     _result = None   # runtime RadioMapResult (never serialized)
     _solver_result_handle = ""
@@ -70,8 +75,11 @@ class RadioMapComponent(FieldComponent):
     # A flat 20 m square on the horizontal XZ plane (Y is the normal/up axis).
     min_bound = vector3_field([-10.0, 0.0, -10.0], group="Settings", description="Min corner (local).")
     max_bound = vector3_field([10.0, 0.0, 10.0], group="Settings", description="Max corner (local).")
-    resolution = vector3_field([64.0, 1.0, 64.0], group="Settings",
+    grid_mode = string_field("Resolution", options=["Resolution", "PPW"], hidden=True)
+    resolution = vector3_field([256.0, 1.0, 256.0], group=f"{_GRID}.Resolution",
                                description="Grid resolution per axis (tangential axes used).")
+    points_per_wavelength = float_field(4.0, min=1e-6, group=f"{_GRID}.PPW", title="PPW",
+                                        description="Receiver-grid points per wavelength.")
 
     # --- scene config (frequency is the inherited Field field) ---
     device = string_field("cuda", options=["cuda", "cpu"], enum_toggle=True, group=_SCENE,
@@ -269,6 +277,7 @@ class RadioMapComponent(FieldComponent):
     def _component_config(self) -> dict:
         keys = (
             "frequency", "use_noise_power", "noise_power", "device", "solver",
+            "grid_mode", "points_per_wavelength",
             "det_metric", "det_num_samples", "det_max_bounces", "det_max_diffraction_order",
             "det_quadrature_mode", "det_samples_per_cell", "det_shadow_boundary_correction",
             "det_synthetic_array", "det_resolution_wavelength", "det_solver_mode",

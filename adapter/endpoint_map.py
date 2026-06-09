@@ -8,6 +8,7 @@ the component. A platform ``Transmitter`` <-> a ``ChannelTx`` object; a point
 (kept off the display Transform). Scene-default ``tx_array`` / ``rx_array`` are baked
 into each endpoint that lacks an explicit array on import.
 """
+import math
 from typing import Any, Optional, Tuple
 
 from witwin_server import SceneObject
@@ -24,6 +25,7 @@ RADIOMAP_COMPONENT = "RadioMap"
 # plane -> (grid axis, normal index, tangential0 index, tangential1 index).
 _PLANE_INFO = {"XY": ("z", 2, 0, 1), "XZ": ("y", 1, 0, 2), "YZ": ("x", 0, 1, 2)}
 _AXIS_TO_PLANE = {"z": "XY", "y": "XZ", "x": "YZ"}
+_SPEED_OF_LIGHT = 299792458.0
 
 
 class EndpointMap:
@@ -89,6 +91,7 @@ class EndpointMap:
         mn[t1], mx[t1] = b[1][0] - c1, b[1][1] - c1
 
         comp.plane = plane
+        comp.grid_mode = "Resolution"
         comp.min_bound = mn
         comp.max_bound = mx
         comp.resolution = EndpointMap._grid_resolution(grid, normal, t0, t1)
@@ -131,9 +134,19 @@ class EndpointMap:
         axis, normal, t0, t1 = _PLANE_INFO[str(comp.plane)]
         bounds = ((pos[t0] + mn[t0], pos[t0] + mx[t0]), (pos[t1] + mn[t1], pos[t1] + mx[t1]))
         position = pos[normal] + mn[normal]
-        grid_shape = (max(1, int(res[t0])), max(1, int(res[t1])))
+        size0 = abs(bounds[0][1] - bounds[0][0])
+        size1 = abs(bounds[1][1] - bounds[1][0])
+        grid_shape = _radiomap_grid_shape(
+            getattr(comp, "grid_mode", "Resolution"),
+            size0,
+            size1,
+            res[t0],
+            res[t1],
+            getattr(comp, "frequency", 0.0),
+            getattr(comp, "points_per_wavelength", 4.0),
+        )
         return ch.ReceiverGrid(name=obj.name, axis=axis, position=position,
-                               bounds=bounds, grid_shape=grid_shape)
+                                bounds=bounds, grid_shape=grid_shape)
 
     # --- helpers -------------------------------------------------------------
 
@@ -182,3 +195,20 @@ class EndpointMap:
         res[t0] = max(1, round(e0 / float(d0)))
         res[t1] = max(1, round(e1 / float(d1)))
         return res
+
+
+def _radiomap_grid_shape(
+    grid_mode: Any,
+    size0: float,
+    size1: float,
+    res0: float,
+    res1: float,
+    frequency: Any,
+    points_per_wavelength: Any,
+) -> tuple[int, int]:
+    if str(grid_mode) == "PPW":
+        freq = max(float(frequency or 0.0), 1e-30)
+        ppw = max(float(points_per_wavelength or 4.0), 1e-30)
+        cell = _SPEED_OF_LIGHT / freq / ppw
+        return (max(1, int(math.ceil(size0 / cell))), max(1, int(math.ceil(size1 / cell))))
+    return (max(1, int(res0)), max(1, int(res1)))

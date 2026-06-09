@@ -15,10 +15,14 @@ solve suites need CUDA RayD/OptiX and are gated per-solver by the ``det_ready`` 
 *that* one can't run here).
 """
 import importlib
+import inspect
 import sys
 from pathlib import Path
 
 import pytest
+
+if not hasattr(inspect, "getargspec"):
+    inspect.getargspec = inspect.getfullargspec  # type: ignore[attr-defined]
 
 # .../plugins/wt_channel/tests -> .../plugins
 PLUGINS_DIR = Path(__file__).resolve().parents[2]
