@@ -118,7 +118,7 @@ class RadioMapComponent(FieldComponent):
                                    group=_DET_TUNING, show_if=_DET)
     det_memory_profile = string_field("default", options=["default", "memory_safe"],
                                       group=_DET_TUNING, show_if=_DET)
-    det_reflection_field_backend = string_field("drjit", options=["drjit", "native"],
+    det_reflection_field_backend = string_field("native", options=["drjit", "native"],
                                                 group=_DET_TUNING, show_if=_DET)
 
     # --- monte carlo config ---
@@ -134,7 +134,7 @@ class RadioMapComponent(FieldComponent):
     mc_seed = int_field(0, min=0, group=_MC_INTEGRATOR, show_if=_MC)
     mc_bdpt_diffraction_sampling = string_field("sobol", options=["hash", "sobol"],
                                                 group=_MC_INTEGRATOR, show_if=_MC)
-    mc_accumulation_backend = string_field("rayd_reflection_accumulation",
+    mc_accumulation_backend = string_field("auto",
                                            options=["auto", "native_monte_carlo",
                                                     "rayd_reflection_accumulation"],
                                            group=_MC_INTEGRATOR, show_if=_MC,
@@ -157,7 +157,7 @@ class RadioMapComponent(FieldComponent):
                                   group=_MC_TUNING, show_if=_MC)
     mc_memory_profile = string_field("default", options=["default", "memory_safe"],
                                      group=_MC_TUNING, show_if=_MC)
-    mc_reflection_field_backend = string_field("drjit", options=["drjit", "native"],
+    mc_reflection_field_backend = string_field("native", options=["drjit", "native"],
                                                group=_MC_TUNING, show_if=_MC)
 
     # --- shared edge policy ---

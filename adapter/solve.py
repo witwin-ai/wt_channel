@@ -34,7 +34,7 @@ class MapImage:
 class ConfigBuilder:
     """Read the ``ChannelResult`` component into platform solver configs."""
 
-    _MC_ACCUMULATION_DEFAULT = "rayd_reflection_accumulation"
+    _MC_ACCUMULATION_DEFAULT = "auto"
 
     @staticmethod
     def _str_field(comp: Any, name: str, default: str) -> str:
@@ -64,7 +64,7 @@ class ConfigBuilder:
             solver_mode=str(comp.det_solver_mode),
             memory_profile=str(comp.det_memory_profile),
             reflection_field_backend=ConfigBuilder._str_field(
-                comp, "det_reflection_field_backend", "drjit"),
+                comp, "det_reflection_field_backend", "native"),
         )
         return ch.deterministic.Config(
             metric=str(comp.det_metric),
@@ -91,7 +91,7 @@ class ConfigBuilder:
             solver_mode=str(comp.mc_solver_mode),
             memory_profile=str(comp.mc_memory_profile),
             reflection_field_backend=ConfigBuilder._str_field(
-                comp, "mc_reflection_field_backend", "drjit"),
+                comp, "mc_reflection_field_backend", "native"),
         )
         options = ch.montecarlo.IntegratorOptions(
             integrator=integrator,
