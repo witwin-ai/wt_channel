@@ -1,8 +1,8 @@
 id = "witwin.channel"
-name = "Channel (Radiomap)"
+name = "Channel"
 version = "0.1.0"
 author = ""
-description = "Round-trips witwin.channel solver scenes <-> the studio editor (structures, endpoints, antenna arrays, ITU materials) and runs the deterministic and Monte Carlo solvers with 2D radiomap visualization."
+description = "Radio channel radiomap solver with 2D visualization."
 license = "GPL-3.0-or-later"
 repository = "https://github.com/witwin-ai/wt_channel"
 dependencies = ["scipy", "numpy"]
