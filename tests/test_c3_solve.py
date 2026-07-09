@@ -145,6 +145,11 @@ def test_edge_policy_default_and_overrides():
     import witwin.channel as ch
     from wt_channel.adapter.solve import ConfigBuilder
 
+    default_comp = _result_component()
+    assert default_comp.ep_edge_diffraction == "on"
+    default_policy = ConfigBuilder.edge_policy(ch, default_comp)
+    assert default_policy.edge_diffraction is True
+
     comp = _result_component()
     comp.ep_vertical_ratio = 0.6
     comp.ep_edge_selection_mode = "vertical_only"
@@ -203,7 +208,13 @@ def test_platform_compat_restores_getargspec(monkeypatch):
 
     apply_platform_compat()
 
-    assert inspect.getargspec is inspect.getfullargspec
+    args, varargs, keywords, defaults = inspect.getargspec(
+        lambda value, *args, **kwargs: value
+    )
+    assert args == ["value"]
+    assert varargs == "args"
+    assert keywords == "kwargs"
+    assert defaults is None
 
 
 def test_demo_prefab_does_not_import_channel_platform(monkeypatch, wtc):

@@ -164,8 +164,8 @@ class RadioMapComponent(FieldComponent):
     ep_vertical_ratio = float_field(0.7, min=0.0, max=1.0, group=_EDGE)
     ep_edge_selection_mode = string_field("all_edges", options=["all_edges", "vertical_only"],
                                           group=_EDGE)
-    ep_edge_diffraction = string_field("default", options=["default", "on", "off"], group=_EDGE,
-                                       description="Boundary-edge diffraction (default lets the solver decide).")
+    ep_edge_diffraction = string_field("on", options=["default", "on", "off"], group=_EDGE,
+                                       description="Boundary-edge diffraction. Use default to let the solver decide.")
 
     @button(display_name="Solve", group=_SCENE, operation="solver", cancellable=True,
             progress_surface="component")

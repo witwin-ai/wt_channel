@@ -17,12 +17,23 @@ solve suites need CUDA RayD/OptiX and are gated per-solver by the ``det_ready`` 
 import importlib
 import inspect
 import sys
+from collections import namedtuple
 from pathlib import Path
 
 import pytest
 
+_ArgSpec = namedtuple("ArgSpec", "args varargs keywords defaults")
+
+
+def _getargspec(func):
+    spec = inspect.getfullargspec(func)
+    return _ArgSpec(spec.args, spec.varargs, spec.varkw, spec.defaults)
+
+
+if not hasattr(inspect, "ArgSpec"):
+    inspect.ArgSpec = _ArgSpec  # type: ignore[attr-defined]
 if not hasattr(inspect, "getargspec"):
-    inspect.getargspec = inspect.getfullargspec  # type: ignore[attr-defined]
+    inspect.getargspec = _getargspec  # type: ignore[attr-defined]
 
 # .../plugins/wt_channel/tests -> .../plugins
 PLUGINS_DIR = Path(__file__).resolve().parents[2]
