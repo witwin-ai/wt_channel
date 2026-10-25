@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import math
 import sys
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,6 +27,37 @@ from wt_channel.adapter.path_solve import (
     _gain_to_rgba,
 )
 from wt_channel.adapter.solve import SolveRunner
+
+
+# Scenes this process received, by the caller's scene_key (newest last). Dragging the
+# Tx re-solves the same geometry many times; shipping the Scene document each time
+# costs more than a Monte Carlo preview solve, so a preview sends only the key and
+# the Tx position.
+_SCENES: "OrderedDict[str, Any]" = OrderedDict()
+_MAX_SCENES = 2
+
+
+def _scene_for(scene, config: Dict[str, Any]):
+    key = str(config.get("scene_key") or "")
+    if scene is not None:
+        if key:
+            _SCENES[key] = scene
+            _SCENES.move_to_end(key)
+            while len(_SCENES) > _MAX_SCENES:
+                _SCENES.popitem(last=False)
+    elif key in _SCENES:
+        scene = _SCENES[key]
+        _SCENES.move_to_end(key)
+    else:
+        raise LookupError(f"scene_cache_miss: no cached scene for key {key!r}")
+    tx_position = config.get("tx_position")
+    if tx_position is not None:
+        name = str(config.get("transmitter") or "")
+        tx = next((o for o in scene.objects.values() if o.name == name), None)
+        if tx is None:
+            raise ValueError(f"transmitter {name!r} is not in the cached scene")
+        tx.get_component("Transform").position = [float(v) for v in tx_position]
+    return scene
 
 
 @dataclass
@@ -69,6 +101,7 @@ def solve(ctx, scene, config):
         ctx.progress(1.0, "Channel path solve complete")
         return cache
     ctx.progress(0.0, "building Channel radiomap scene")
+    scene = _scene_for(scene, config)
     result = SolveRunner.run(scene, comp, transmitter=transmitter, receiver=receiver)
     ctx.progress(0.9, "extracting Channel radiomap cache")
     cache = _radiomap_cache(result)
