@@ -28,6 +28,9 @@ from .material_map import ChannelMaterialMap
 PATHSOLVER_COMPONENT = "PathSolver"
 CHANNEL_METADATA_KEY = "channel"
 DEFAULT_MESH_MATERIAL = "concrete"
+# StructureMeta tag for scene dressing that radio waves pass through (street-map roads
+# drawn as ribbons, tree canopies): drawn in the viewport, left out of the radio world.
+RF_TRANSPARENT_TAG = "rf:transparent"
 
 
 class ChannelAdapter:
@@ -100,6 +103,8 @@ class ChannelAdapter:
             elif obj.get_component(RADIOMAP_COMPONENT) is not None:
                 if receiver is None or obj.name == receiver:
                     endpoints.append(EndpointMap.radiomap_to_platform(obj))
+            elif self._rf_transparent(obj):
+                continue
             elif obj.get_component("PlatformGeometry") is not None:
                 structures.append(self._structure_to_platform(obj, frequency))
             elif self._is_plain_mesh(obj):
@@ -125,6 +130,8 @@ class ChannelAdapter:
         meshes (used as default-material walls).
         """
         for obj in studio_scene.objects.values():
+            if ChannelAdapter._rf_transparent(obj):
+                continue
             if obj.get_component("PlatformGeometry") is not None or ChannelAdapter._is_plain_mesh(obj):
                 return True
         return False
@@ -138,6 +145,11 @@ class ChannelAdapter:
         raise KeyError(name)
 
     # --- helpers -------------------------------------------------------------
+
+    @staticmethod
+    def _rf_transparent(obj: SceneObject) -> bool:
+        meta = obj.get_component("StructureMeta")
+        return meta is not None and RF_TRANSPARENT_TAG in list(meta.tags or [])
 
     @staticmethod
     def _is_plain_mesh(obj: SceneObject) -> bool:

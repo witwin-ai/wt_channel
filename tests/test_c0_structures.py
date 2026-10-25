@@ -192,3 +192,35 @@ def test_core_world_roundtrips_through_studio(adapter):
     assert [s.name for s in rebuilt.structures] == ["ground"]
     assert sorted(e.metadata["name"] for e in rebuilt.endpoints) == ["rm", "tx"]
     assert rebuilt.metadata["channel"]["frequency_hz"] == pytest.approx(2.4e9)
+
+
+def _tag_rf_transparent(obj):
+    from witwin_server.core.components.structure_meta import StructureMetaComponent
+
+    meta = obj.add_component(StructureMetaComponent())
+    meta.tags = ["rf:transparent"]
+    return obj
+
+
+def test_rf_transparent_meshes_stay_out_of_the_radio_world(adapter):
+    # Imported street maps draw roads as flat ribbons and trees as canopy blobs. As
+    # default-concrete walls they added spurious diffraction edges and cost ~40 % of a
+    # deterministic UCSD refine (10.6 s -> 6.5 s without them, same coverage).
+    from wt_channel.adapter.channel_adapter import RF_TRANSPARENT_TAG
+
+    studio = _studio()
+    studio.add_object(_quad_mesh())
+    studio.add_object(_tag_rf_transparent(_quad_mesh("roads")))
+    _add_tx(studio)
+    _add_radiomap(studio)
+
+    world = adapter.build(studio, frequency=3.5e9)
+
+    assert RF_TRANSPARENT_TAG == "rf:transparent"
+    assert [s.name for s in world.structures] == ["ground"]
+
+
+def test_has_structures_ignores_rf_transparent_meshes(adapter):
+    studio = _studio()
+    studio.add_object(_tag_rf_transparent(_quad_mesh("roads")))
+    assert adapter.has_structures(studio) is False
