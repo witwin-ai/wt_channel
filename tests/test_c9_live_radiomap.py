@@ -158,3 +158,12 @@ def test_an_explicit_solve_drops_pending_live_work(solver_api):
 
     asyncio.run(main())
     assert [c["scene_sent"] for c in solver_api.calls] == [True, True]
+
+
+def test_the_tx_asks_the_viewport_to_stream_its_drag():
+    # The Studio viewport streams a drag to the server only for objects whose component
+    # value live_drag is true; without it the map would update only on mouse-up.
+    from wt_channel.components.endpoints import TxComponent
+
+    values = TxComponent().to_dict()["values"]
+    assert values["live_drag"] is True

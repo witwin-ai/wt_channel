@@ -46,6 +46,9 @@ class TxComponent(Component):
     ``Transmitter`` component in the global registry.
     """
 
+    # Asks the Studio viewport to stream gizmo drags of this object to the server, so a
+    # RadioMap with live_update follows the Tx while it moves (not only on mouse-up).
+    live_drag = bool_field(True, hidden=True)
     polarization = vector3_field([1.0, 0.0, 0.0], description="Transmit field polarization vector.")
     power = float_field(1.0, min=1e-12, description="Transmit power (linear, > 0).")
     use_orientation = bool_field(False, title="Orientation")
