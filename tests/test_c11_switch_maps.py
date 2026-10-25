@@ -103,3 +103,31 @@ def test_each_solve_keeps_only_the_newest_compiled_scene(host, monkeypatch):
     host.module.solve(_Ctx(), _studio_with_tx(), _config("mit"))
 
     assert list(registry._compiled) == [("older", 2)]
+
+
+def test_a_failed_solve_lets_go_of_its_gpu_tensors(host, monkeypatch):
+    # Princeton ran out of memory at 39 s and the solver host kept all 16 GB: the
+    # error carried the failed attempt's frames (and their tensors) out of solve(), so
+    # every later solve - other maps, Monte Carlo retries - ran out of memory too.
+    import gc
+    import weakref
+
+    held = []
+
+    class Big:
+        pass
+
+    def failing_run(scene, comp, *, transmitter, receiver, grid_shape=None):
+        big = Big()
+        held.append(weakref.ref(big))
+        raise RuntimeError("CUDA error: an illegal memory access was encountered")
+
+    monkeypatch.setattr(host.module.SolveRunner, "run", staticmethod(failing_run))
+
+    with pytest.raises(RuntimeError, match="illegal memory access") as caught:
+        host.module.solve(_Ctx(), _studio_with_tx(), _config("princeton"))
+    gc.collect()
+
+    assert held[0]() is None  # nothing keeps the failed attempt's locals alive
+    assert caught.value.__cause__ is None and caught.value.__context__ is None
+    assert host.events.cleared == 1  # and the compiled scenes are dropped

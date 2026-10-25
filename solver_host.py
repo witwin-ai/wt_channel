@@ -117,17 +117,33 @@ def solve(ctx, scene, config):
         grid_shape is None or grid_shape[0] * grid_shape[1] >= _HEAVY_GRID_CELLS)
     if heavy:
         _release_torch_cache()
+    failure = None
     try:
         result = _run_with_memory_retry(scene, comp, transmitter, receiver, grid_shape)
         _keep_newest_compiled_scene()
         ctx.progress(0.9, "extracting Channel radiomap cache")
         cache = _radiomap_cache(result)
-    finally:
-        if heavy:
-            result = None
-            _release_torch_cache()
+        result = None
+    except Exception as exc:  # noqa: BLE001 - re-raised below without its frames
+        failure = (type(exc), str(exc))
+    if failure is not None:
+        # Outside the except block, so the failed attempt's frames - and the GPU tensors
+        # they hold - are gone: Princeton ran out of memory and the solver host kept all
+        # 16 GB, so every later solve (other maps, Monte Carlo retries) failed too.
+        _forget_compiled_scenes()
+        raise _plain_error(*failure)
+    if heavy:
+        _release_torch_cache()
     ctx.progress(1.0, "Channel radiomap solve complete")
     return cache
+
+
+def _plain_error(kind, message: str) -> BaseException:
+    """The same kind of error with only its message (no traceback, no chained cause)."""
+    try:
+        return kind(message)
+    except Exception:  # noqa: BLE001 - an error type with another constructor
+        return RuntimeError(message)
 
 
 def _run_with_memory_retry(scene, comp, transmitter, receiver, grid_shape):
