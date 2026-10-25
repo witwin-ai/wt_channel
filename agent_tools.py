@@ -31,6 +31,7 @@ TX_OBJECT_NAME = "Radio Map Tx"
 MAP_OBJECT_NAME = "Radio Map"
 # Cells at or below this level (dB) received nothing (the map floors 0 at -300 dB).
 NO_COVERAGE_DB = -250.0
+SOLVERS = ("deterministic", "montecarlo")
 _GROUND_NEIGHBOURS = 16
 _GROUND_BAND_M = 3.0
 _ROOF_CLEARANCE_M = 3.0
@@ -63,6 +64,9 @@ _INPUT_SCHEMA = {
                         "description": "Map plane height above local ground (m). Default 1.5."},
         "resolution": {"type": "integer", "minimum": 2, "maximum": 1024,
                        "description": "Grid cells per side. Default 256."},
+        "solver": {"type": "string", "enum": list(SOLVERS),
+                   "description": "Ray-tracing solver. Default deterministic (reflections + "
+                                  "edge diffraction); falls back to montecarlo if it fails."},
         "samples": {"type": "integer", "minimum": 1024, "maximum": 67108864,
                     "description": "Monte Carlo rays per transmitter. Default 1048576."},
         "max_bounces": {"type": "integer", "minimum": 0, "maximum": 5,
@@ -73,6 +77,7 @@ _INPUT_SCHEMA = {
 
 _DEFAULTS = {
     "frequency_ghz": 3.5,
+    "solver": "deterministic",
     "tx_height_m": 30.0,
     "rx_height_m": 1.5,
     "resolution": 256,
@@ -159,8 +164,16 @@ def _find_object(scene: Any, name: str, component: str) -> Optional[SceneObject]
 
 def ensure_radiomap_objects(scene: Any, plan: Dict[str, Any], *, frequency_hz: float,
                             resolution: int, samples: int,
-                            max_bounces: int) -> Tuple[SceneObject, SceneObject]:
-    """Create (or reuse) the tool's Tx + RadioMap objects and apply the plan."""
+                            max_bounces: int,
+                            solver: str = "deterministic") -> Tuple[SceneObject, SceneObject]:
+    """Create (or reuse) the tool's Tx + RadioMap objects and apply the plan.
+
+    Deterministic is the default: with first-order UTD it lights shadowed streets that
+    Monte Carlo basic leaves mostly empty at a million rays. Both configs are written so
+    a fallback only has to switch ``solver``.
+    """
+    if solver not in SOLVERS:
+        raise ValueError(f"unknown radio map solver: {solver}")
     from .components.endpoints import TxComponent
     from .components.radiomap import RadioMapComponent
 
@@ -185,7 +198,9 @@ def ensure_radiomap_objects(scene: Any, plan: Dict[str, Any], *, frequency_hz: f
     comp.min_bound = [-half, 0.0, -half]
     comp.max_bound = [half, 0.0, half]
     comp.resolution = [float(resolution), 1.0, float(resolution)]
-    comp.solver = "montecarlo"
+    comp.solver = solver
+    comp.det_max_bounces = int(max_bounces)
+    comp.det_max_diffraction_order = 1
     comp.mc_integrator = "basic"
     comp.mc_samples_per_tx = int(samples)
     comp.mc_max_bounces = int(max_bounces)
@@ -249,11 +264,19 @@ def make_run_radiomap_tool(ctx: Any) -> Tool:
         resolution = int(opts["resolution"])
         tx, rmap = ensure_radiomap_objects(
             scene, plan, frequency_hz=frequency_hz, resolution=resolution,
-            samples=int(opts["samples"]), max_bounces=int(opts["max_bounces"]))
+            samples=int(opts["samples"]), max_bounces=int(opts["max_bounces"]),
+            solver=str(opts["solver"]))
 
         comp = rmap.get_component(RADIOMAP_COMPONENT)
+        fallback = None
         started = time.perf_counter()
         message = await comp.solve_for(tx.name)
+        if message != "Solve complete" and str(comp.solver) == "deterministic":
+            # An older channel build cannot link the diffraction pipelines; Monte Carlo
+            # still gives the user a map, and the result names the solver that ran.
+            fallback = {"from": "deterministic", "reason": message}
+            comp.solver = "montecarlo"
+            message = await comp.solve_for(tx.name)
         solve_seconds = time.perf_counter() - started
         if message != "Solve complete":
             raise ToolError(f"radio map solve failed: {message}", code="solve_failed")
@@ -273,6 +296,8 @@ def make_run_radiomap_tool(ctx: Any) -> Tool:
             "geometry_y_range": plan["geometry_y_range"],
             "path_gain_db": _db_statistics(payload["data"]),
             "solve_seconds": round(solve_seconds, 3),
+            "solver": str(comp.solver),
+            **({"fallback": fallback} if fallback else {}),
         }
 
     return run_radiomap

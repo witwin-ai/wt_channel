@@ -93,8 +93,38 @@ def test_ensure_objects_creates_then_reuses_tx_and_map():
     np.testing.assert_allclose(list(comp.resolution), [32.0, 1.0, 32.0])
     np.testing.assert_allclose(list(comp.min_bound), [-50.0, 0.0, -50.0])
     np.testing.assert_allclose(list(comp.max_bound), [50.0, 0.0, 50.0])
-    assert str(comp.solver) == "montecarlo"
     np.testing.assert_allclose(list(rmap.get_component("Transform").position), [0.0, 1.5, 0.0])
+
+
+def test_ensure_objects_default_to_deterministic_with_diffraction():
+    # Monte Carlo basic leaves most shadowed street cells empty (UCSD: 12 % of shadow
+    # cells lit at 1M rays); the deterministic solver with first-order UTD lit 78 % in 15 s.
+    from wt_channel.agent_tools import ensure_radiomap_objects, plan_radiomap, scene_vertices
+
+    studio = _studio_with_map()
+    _, rmap = ensure_radiomap_objects(studio, plan_radiomap(scene_vertices(studio)),
+                                      frequency_hz=3.5e9, resolution=16, samples=4096,
+                                      max_bounces=2)
+
+    comp = rmap.get_component("RadioMap")
+    assert str(comp.solver) == "deterministic"
+    assert int(comp.det_max_bounces) == 2
+    assert int(comp.det_max_diffraction_order) == 1
+
+
+def test_ensure_objects_honour_monte_carlo():
+    from wt_channel.agent_tools import ensure_radiomap_objects, plan_radiomap, scene_vertices
+
+    studio = _studio_with_map()
+    _, rmap = ensure_radiomap_objects(studio, plan_radiomap(scene_vertices(studio)),
+                                      frequency_hz=3.5e9, resolution=16, samples=4096,
+                                      max_bounces=1, solver="montecarlo")
+
+    comp = rmap.get_component("RadioMap")
+    assert (str(comp.solver), str(comp.mc_integrator)) == ("montecarlo", "basic")
+    assert int(comp.mc_samples_per_tx) == 4096
+    assert int(comp.mc_max_bounces) == 1
+    assert int(comp.mc_max_diffraction_order) == 1
 
 
 def test_scene_vertices_ignore_channel_objects():
@@ -172,7 +202,10 @@ def test_tool_solves_and_reports_statistics(monkeypatch):
     assert calls["solve"]["solver_id"] == "witwin.channel.radiomap"
     assert calls["solve"]["config"]["transmitter"] == result["transmitter"]["name"]
     assert calls["solve"]["config"]["component"]["frequency"] == pytest.approx(2.4e9)
+    assert calls["solve"]["config"]["component"]["solver"] == "deterministic"
     assert result["ok"] is True
+    assert result["solver"] == "deterministic"
+    assert "fallback" not in result
     assert result["radiomap"]["object_id"]
     assert result["radiomap"]["grid"] == [2, 2]
     stats = result["path_gain_db"]
@@ -209,6 +242,65 @@ def test_tool_reports_solver_failure(monkeypatch):
 
     with pytest.raises(ToolError, match="out of memory"):
         asyncio.run(_registered_tool(_studio_with_map()).run({}))
+
+
+class _Run:
+    def __init__(self, error=None):
+        self.status = "failed" if error else "succeeded"
+        self.outputs = {} if error else {"resultHandle": "h"}
+        self.run_id = "r"
+        self.error = {"message": error} if error else None
+
+
+def _scripted_solver(monkeypatch, failures):
+    """Fake solver that fails for the solver families in ``failures`` (family -> message)."""
+    import wt_channel.components.radiomap as radiomap_mod
+
+    calls = []
+
+    class Solvers:
+        def solve(self, solver_id, **kwargs):
+            family = kwargs["config"]["component"]["solver"]
+            calls.append(family)
+            return _Run(failures.get(family))
+
+        def query(self, solver_id, handle, op, params, **kwargs):
+            return {"data": {"data": np.full((2, 2), -90.0, np.float32), "extent": [0, 1, 0, 1]}}
+
+    monkeypatch.setattr(radiomap_mod, "api", SimpleNamespace(solvers=Solvers()))
+    monkeypatch.setattr(radiomap_mod, "Notifications", SimpleNamespace(
+        success=lambda *a: None, error=lambda *a: None))
+    return calls
+
+
+def test_tool_falls_back_to_monte_carlo_when_deterministic_fails(monkeypatch):
+    # A channel build whose deterministic diffraction pipeline cannot link must still
+    # end in a radio map, and the result says which solver produced it.
+    calls = _scripted_solver(monkeypatch, {"deterministic": "OptiX error 7251"})
+
+    result = asyncio.run(_registered_tool(_studio_with_map()).run({"resolution": 2}))
+
+    assert calls == ["deterministic", "montecarlo"]
+    assert result["solver"] == "montecarlo"
+    assert "7251" in result["fallback"]["reason"]
+    assert result["fallback"]["from"] == "deterministic"
+
+
+def test_tool_explicit_monte_carlo_does_not_fall_back(monkeypatch):
+    from witwin_server.tools.base import ToolError
+
+    calls = _scripted_solver(monkeypatch, {"montecarlo": "out of memory"})
+
+    with pytest.raises(ToolError, match="out of memory"):
+        asyncio.run(_registered_tool(_studio_with_map()).run({"solver": "montecarlo"}))
+    assert calls == ["montecarlo"]
+
+
+def test_tool_schema_offers_both_solvers():
+    tool = _registered_tool(_studio_with_map())
+
+    solver = tool.input_schema["properties"]["solver"]
+    assert solver["enum"] == ["deterministic", "montecarlo"]
 
 
 def test_manifest_contributes_tool_and_skill():
