@@ -72,3 +72,22 @@ def test_solver_host_keeps_only_the_latest_scenes(host):
 
     assert len(host.module._SCENES) <= 2
     assert "k4" in host.module._SCENES
+
+
+def test_deterministic_solves_release_the_torch_cache_around_them(host, monkeypatch):
+    # The deterministic UCSD solve peaks near 14 GB of a 16 GB GPU. RayD/OptiX allocate
+    # outside torch, so blocks torch keeps cached from the previous solve (or from the
+    # Monte Carlo previews) push the next deterministic solve past physical memory:
+    # 10 s became 90-160 s and the Studio solver host was killed as unresponsive.
+    import torch
+
+    released = []
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: released.append(len(host.seen)))
+    studio = _studio_with_tx()
+
+    host.module.solve(_Ctx(), studio, _config(scene_key="k", component={"solver": "montecarlo"}))
+    assert released == []  # previews keep the cache warm
+    host.module.solve(_Ctx(), None, _config(scene_key="k", tx_position=[1, 30, 0],
+                                            component={"solver": "deterministic"}))
+    assert released == [1, 2]  # before and after the deterministic solve

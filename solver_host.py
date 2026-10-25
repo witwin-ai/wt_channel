@@ -102,11 +102,33 @@ def solve(ctx, scene, config):
         return cache
     ctx.progress(0.0, "building Channel radiomap scene")
     scene = _scene_for(scene, config)
-    result = SolveRunner.run(scene, comp, transmitter=transmitter, receiver=receiver)
-    ctx.progress(0.9, "extracting Channel radiomap cache")
-    cache = _radiomap_cache(result)
+    heavy = str(getattr(comp, "solver", "")) == "deterministic"
+    if heavy:
+        _release_torch_cache()
+    try:
+        result = SolveRunner.run(scene, comp, transmitter=transmitter, receiver=receiver)
+        ctx.progress(0.9, "extracting Channel radiomap cache")
+        cache = _radiomap_cache(result)
+    finally:
+        if heavy:
+            result = None
+            _release_torch_cache()
     ctx.progress(1.0, "Channel radiomap solve complete")
     return cache
+
+
+def _release_torch_cache() -> None:
+    """Hand torch's cached GPU blocks back to the driver around a deterministic solve.
+
+    A deterministic radio map can peak near the whole GPU (UCSD: ~14 GB of 16 GB) and
+    RayD/OptiX allocate outside torch, so blocks torch keeps cached from the previous
+    solve or from Monte Carlo previews push it past physical memory (10 s -> 90-160 s,
+    then the solver host is killed as unresponsive).
+    """
+    import torch
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def _radiomap_cache(maps) -> RadioMapCache:
