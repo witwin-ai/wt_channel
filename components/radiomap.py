@@ -122,6 +122,9 @@ class RadioMapComponent(FieldComponent):
                                      description="Monte Carlo basic rays per preview.")
     live_settle_s = float_field(1.5, min=0.0, group=_SCENE, show_if="live_update",
                                 description="Seconds the Tx must be still before the full solve.")
+    live_refine_coarse = int_field(128, min=0, group=_SCENE, show_if="live_update",
+                                   description="Cells per side of a quick first refine pass "
+                                               "(0: refine on the full grid only).")
     live_status = string_field("", group=_SCENE, show_if="live_update", readonly=True,
                                description="What the live update is doing: previewing, "
                                            "refining with this solver, or done.")
@@ -317,18 +320,38 @@ class RadioMapComponent(FieldComponent):
     async def _live_refine(self, is_current) -> None:
         # The last preview lands a moment after the drag and looks final, so say when the
         # full solve starts and when its map is on screen.
+        # A coarse pass first (UCSD deterministic: 128^2 in ~1.6 s) puts a map with every
+        # propagation effect on screen quickly; the RadioMap's own grid follows (~6.5 s).
         solver = str(self.solver)
-        self._set_live_status(f"Refining ({solver})...")
         Notifications.info("Channel", f"Refining the radio map with the {solver} solver...")
         started = time.perf_counter()
-        outcome = await self._live_solve(
-            self._solver_config(self._live_tx_name, self._owner.name), is_current)
-        if outcome == "applied":
-            seconds = time.perf_counter() - started
-            self._set_live_status(f"Done: {solver}, {seconds:.1f} s")
-            Notifications.success("Channel", f"Radio map refined ({solver}, {seconds:.1f} s)")
-        else:
-            self._set_live_status("Tx moved: refining again once it stops")
+        for shape in self._refine_passes():
+            n_u, n_v = shape or self._grid_shape()
+            self._set_live_status(f"Refining ({solver}, {n_u}x{n_v})...")
+            config = self._solver_config(self._live_tx_name, self._owner.name)
+            if shape is not None:
+                config["grid_shape"] = [int(n_u), int(n_v)]
+            if await self._live_solve(config, is_current) != "applied":
+                self._set_live_status("Tx moved: refining again once it stops")
+                return
+        seconds = time.perf_counter() - started
+        self._set_live_status(f"Done: {solver}, {seconds:.1f} s")
+        Notifications.success("Channel", f"Radio map refined ({solver}, {seconds:.1f} s)")
+
+    def _grid_shape(self):
+        """The RadioMap's own receiver grid ``(n_u, n_v)``."""
+        from ..adapter.endpoint_map import EndpointMap
+
+        return tuple(int(v) for v in EndpointMap.radiomap_to_platform(self._owner).shape)
+
+    def _refine_passes(self):
+        """Grid overrides of the refine passes; ``None`` is the RadioMap's own grid."""
+        n_u, n_v = self._grid_shape()
+        coarse = int(self.live_refine_coarse)
+        if coarse <= 0 or max(n_u, n_v) <= coarse:
+            return [None]
+        scale = coarse / max(n_u, n_v)
+        return [(max(1, round(n_u * scale)), max(1, round(n_v * scale))), None]
 
     def _live_cancel(self) -> None:
         if self._live_run_id:
@@ -405,6 +428,7 @@ class RadioMapComponent(FieldComponent):
                                             log_scale=bool(self.log_scale))
             data = img.data
             label = img.label
+        data = self._on_own_grid(data)
         self._applying_map = True  # these writes are display state, not a grid edit
         try:
             self.set_volume_data(self._to_plane_volume(self._display_values(data)))  # normalizes + sets resolution
@@ -415,6 +439,20 @@ class RadioMapComponent(FieldComponent):
         if bool(self.send_to_results):
             FieldViz.show_2d(data, title=label)
         return "Map updated"
+
+    def _on_own_grid(self, data2d: np.ndarray) -> np.ndarray:
+        """A coarse map (live preview, first refine pass) on the RadioMap's own grid.
+
+        set_volume_data takes its resolution from the data, so showing a coarse map
+        as is would shrink the RadioMap's grid and the next full solve would run coarse.
+        """
+        data = np.asarray(data2d)
+        n_u, n_v = self._grid_shape()
+        if data.shape == (n_v, n_u):
+            return data
+        rows = (np.arange(n_v) * data.shape[0]) // n_v
+        cols = (np.arange(n_u) * data.shape[1]) // n_u
+        return data[np.ix_(rows, cols)]
 
     def _display_values(self, data2d: np.ndarray) -> np.ndarray:
         """The map as the plane should color it.

@@ -82,7 +82,7 @@ def test_moving_the_tx_previews_then_refines_without_resending_the_scene(solver_
         await comp._live.idle()
 
     asyncio.run(main())
-    explicit, preview, refine = solver_api.calls
+    explicit, preview, coarse, refine = solver_api.calls
     assert explicit["scene_sent"] and explicit["scene_key"]
     assert explicit["component"]["solver"] == "deterministic"
 
@@ -93,7 +93,12 @@ def test_moving_the_tx_previews_then_refines_without_resending_the_scene(solver_
     assert preview["component"]["mc_integrator"] == "basic"
     assert preview["component"]["mc_samples_per_tx"] == 262144
 
+    # The refine comes in two passes: a coarse grid first (UCSD: 128^2 in ~1.6 s), then
+    # the RadioMap's own grid (256^2, ~6.5 s).
+    assert coarse["grid_shape"] == [128, 128]
+    assert coarse["component"]["solver"] == "deterministic"
     assert not refine["scene_sent"]
+    assert "grid_shape" not in refine
     assert refine["tx_position"] == [12.0, 30.0, 0.0]
     assert refine["component"]["solver"] == "deterministic"
 
@@ -254,3 +259,38 @@ def _recording_set_field(comp, statuses):
         return original(name, value, *args, **kwargs)
 
     return set_field
+
+
+def test_a_map_no_bigger_than_the_coarse_grid_refines_once(solver_api):
+    async def main():
+        studio, tx, comp = _scene()
+        comp.resolution = [64.0, 1.0, 64.0]
+        await comp.solve_for("Tx")
+        _move(tx, 12.0)
+        await comp._live.idle()
+
+    asyncio.run(main())
+    refines = [c for c in solver_api.calls[2:] if c["component"]["solver"] == "deterministic"]
+    assert [c.get("grid_shape") for c in refines] == [None]
+
+
+def test_a_coarse_map_is_shown_on_the_radiomap_grid(solver_api, monkeypatch):
+    # set_volume_data takes its resolution from the data; a coarse result must not
+    # shrink the RadioMap's own grid, or the next full solve would run coarse too.
+    import wt_channel.components.radiomap as radiomap_mod
+
+    shown = []
+    monkeypatch.setattr(radiomap_mod.RadioMapComponent, "set_volume_data",
+                        lambda self, vol: shown.append(np.asarray(vol).shape))
+    monkeypatch.setattr(radiomap_mod.RadioMapComponent, "export_volume_data",
+                        lambda self, progress_id=None: None)
+
+    async def main():
+        studio, tx, comp = _scene()
+        comp.resolution = [4.0, 1.0, 4.0]
+        await comp.solve_for("Tx")  # the fake solver returns a 2x2 map
+        return comp
+
+    comp = asyncio.run(main())
+    assert shown == [(4, 1, 4)]
+    np.testing.assert_allclose(list(comp.resolution), [4.0, 1.0, 4.0])
