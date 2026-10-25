@@ -24,9 +24,9 @@ signal strength, e.g.:
 
 1. If the Scene has no map or buildings for the place yet, call
    **`witwin.streetmap.import_map`** first. For UCSD use
-   `{ "location": "University of California San Diego", "radius_km": 0.8 }` (the full
-   official name; "UC San Diego" can resolve to the unrelated University of San Diego).
-   A radius of about 0.5-1 km keeps the solve fast and stays on the campus mesa.
+   `{ "location": "University of California San Diego" }` and omit `radius_km`: the
+   importer uses a curated 1 km campus area, so every run imports the same map (and
+   reuses its cached download). Pass `radius_km` only when the user states a size.
 2. Call **`witwin.channel.run_radiomap`** with `{}`; every argument is optional. The
    grid covers the imported map, the map plane sits 1.5 m above the local ground at
    the map center and one transmitter goes 30 m above the center (clear of rooftops).
