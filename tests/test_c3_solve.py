@@ -265,6 +265,33 @@ def test_radiomap_plane_volume_orientation():
             assert vol[ix, 0, iz] == data[iz, ix]
 
 
+def test_dB_map_display_ignores_uncovered_cells():
+    # Uncovered cells come back at -300 dB (log of 0); left in, the plane's min-max
+    # normalization squeezes every covered cell (-78..-140 dB) into the top colors.
+    from wt_channel.components.radiomap import RadioMapComponent
+
+    comp = RadioMapComponent()
+    covered = np.linspace(-140.0, -78.0, 98).astype(np.float32)
+    data = np.concatenate([covered, [-300.0, -300.0]]).reshape(10, 10)
+
+    shown = comp._display_values(data)
+
+    assert shown.max() == pytest.approx(-78.0)
+    assert shown.min() >= np.percentile(covered, 1) - 1e-3
+    assert shown.reshape(-1)[-1] == pytest.approx(shown.min())  # uncovered -> lowest color
+    np.testing.assert_allclose(shown.reshape(-1)[50:98], data.reshape(-1)[50:98])
+
+
+def test_linear_map_display_is_unchanged():
+    from wt_channel.components.radiomap import RadioMapComponent
+
+    comp = RadioMapComponent()
+    comp.log_scale = False
+    data = np.array([[0.0, 1e-9], [1e-8, 1e-7]], np.float32)
+
+    np.testing.assert_array_equal(comp._display_values(data), data)
+
+
 def test_manifest_declares_rfc012_channel_solvers():
     manifest = tomllib.loads((__import__("pathlib").Path(__file__).resolve().parents[1] / "witwin.toml").read_text())
     solvers = {item["id"]: item for item in manifest["contributes"]["solvers"]}

@@ -41,6 +41,8 @@ _DET = {"field_name": "solver", "operator": "eq", "value": "deterministic"}
 _MC = {"field_name": "solver", "operator": "eq", "value": "montecarlo"}
 _STRAT = {"field_name": "det_quadrature_mode", "operator": "eq", "value": "stratified_fixed_n"}
 _SCENE = "Channel"
+# dB cells at or below this received nothing (the map floors 0 at -300 dB).
+_NO_COVERAGE_DB = -250.0
 _GRID = "Grid"
 _DET_TUNING = "Deterministic Tuning"
 _MC_INTEGRATOR = "Monte Carlo Integrator"
@@ -230,12 +232,29 @@ class RadioMapComponent(FieldComponent):
                                             log_scale=bool(self.log_scale))
             data = img.data
             label = img.label
-        self.set_volume_data(self._to_plane_volume(data))  # normalizes + sets resolution
+        self.set_volume_data(self._to_plane_volume(self._display_values(data)))  # normalizes + sets resolution
         self.set_field("render_mode", "Slices", force=True)
         self.export_volume_data()                              # caches -> volume resource -> plane shows
         if bool(self.send_to_results):
             FieldViz.show_2d(data, title=label)
         return "Map updated"
+
+    def _display_values(self, data2d: np.ndarray) -> np.ndarray:
+        """The map as the plane should color it.
+
+        The plane normalizes min..max. In dB, cells that received nothing sit at the
+        -300 dB floor (log of 0) and would squeeze every covered cell into the top
+        colors, so the window is the covered cells' 1st percentile..max and uncovered
+        cells take the lowest color.
+        """
+        data = np.asarray(data2d, dtype=np.float32)
+        if not bool(self.log_scale):
+            return data
+        covered = np.isfinite(data) & (data > _NO_COVERAGE_DB)
+        if not covered.any():
+            return data
+        low = np.float32(np.percentile(data[covered], 1.0))
+        return np.where(covered, np.clip(data, low, None), low).astype(np.float32)
 
     def _to_plane_volume(self, data2d: np.ndarray) -> np.ndarray:
         """Embed the solved map into a thin world-axis volume aligned to the field region.
