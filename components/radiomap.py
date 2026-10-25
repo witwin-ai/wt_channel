@@ -84,6 +84,7 @@ class RadioMapComponent(FieldComponent):
     _scene_key = ""
     _explicit_solving = False
     _applying_map = False
+    _ground_cache = None  # (scene_key, world vertices) for the below-ground Tx check
 
     # --- lock the inherited Field to a 2D XZ-plane solvable grid ---
     dimension = string_field("2D", options=["2D", "3D"], hidden=True)
@@ -237,6 +238,10 @@ class RadioMapComponent(FieldComponent):
             Notifications.error("Channel", "Radiomap solve needs at least one structure/mesh "
                                 "(e.g. a ground plane or building). Add geometry to the scene.")
             return "No structures in scene"
+        tx = scene.get_object_by_name(transmitter)
+        if tx is not None and self._below_ground(scene, tx.get_component("Transform").position):
+            Notifications.error("Channel", "Radio map not solved: the Tx is below the ground. Move it up.")
+            return "Not solved: the Tx is below the ground"
         try:
             # The full Scene goes out and seeds the solver host's cache for live previews.
             scene_key = uuid.uuid4().hex
@@ -351,7 +356,10 @@ class RadioMapComponent(FieldComponent):
             config = self._solver_config(self._live_tx_name, self._owner.name)
             if shape is not None:
                 config["grid_shape"] = [int(n_u), int(n_v)]
-            if await self._live_solve(config, is_current) != "applied":
+            outcome = await self._live_solve(config, is_current)
+            if outcome == "skipped":
+                return  # Live Status already says why
+            if outcome != "applied":
                 self._set_live_status("Tx moved: refining again once it stops")
                 return
         seconds = time.perf_counter() - started
@@ -381,6 +389,26 @@ class RadioMapComponent(FieldComponent):
         if self._live_run_id:
             api.solvers.cancel(self._live_run_id, "Tx moved")
 
+    def _below_ground(self, scene, position) -> bool:
+        """Whether the Tx sits under the geometry's ground at its (x, z).
+
+        A Tx dragged under the terrain has nothing to solve, and the deterministic
+        refine there ran the GPU out of memory (University of Michigan map).
+        """
+        from ..agent_tools import _ground_height, scene_vertices
+
+        key = self._scene_key
+        cached = self._ground_cache
+        if key and cached is not None and cached[0] == key:
+            vertices = cached[1]
+        else:
+            vertices = scene_vertices(scene)
+            self._ground_cache = (key, vertices) if key else None
+        if len(vertices) == 0:
+            return False
+        x, y, z = (float(v) for v in position)
+        return y < _ground_height(vertices, x, z)
+
     def _remember_live_run(self, run_id: str) -> None:
         self._live_run_id = run_id
 
@@ -391,6 +419,9 @@ class RadioMapComponent(FieldComponent):
         if tx is None:
             raise RuntimeError(f"transmitter {self._live_tx_name!r} is gone")
         config["tx_position"] = [float(v) for v in tx.get_component("Transform").position]
+        if self._below_ground(scene, config["tx_position"]):
+            self._set_live_status("Tx is below the ground: move it up to update the radio map")
+            return "skipped"
         for _ in range(2):
             send_scene = not self._scene_key
             if send_scene:

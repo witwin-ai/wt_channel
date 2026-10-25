@@ -316,3 +316,32 @@ def test_monte_carlo_previews_stay_available(solver_api):
     assert preview["component"]["mc_integrator"] == "basic"
     assert preview["component"]["mc_samples_per_tx"] == 262144
     assert "grid_shape" not in preview
+
+
+def test_a_tx_dragged_below_the_ground_is_not_solved(solver_api):
+    # A Tx dragged 70 m under the University of Michigan terrain made the deterministic
+    # refine run out of GPU memory; nothing on screen said why. Below the ground there
+    # is nothing to solve: Live Status says so and no solve is submitted.
+    async def main():
+        studio, tx, comp = _scene()
+        await comp.solve_for("Tx")
+        sent = len(solver_api.calls)
+        tx.get_component("Transform").position = [12.0, -5.0, 0.0]
+        await comp._live.idle()
+        return comp, sent
+
+    comp, sent = asyncio.run(main())
+    assert len(solver_api.calls) == sent
+    assert "below the ground" in str(comp.live_status)
+
+
+def test_solve_refuses_a_tx_below_the_ground(solver_api):
+    async def main():
+        studio, tx, comp = _scene()
+        tx.get_component("Transform").position = [0.0, -5.0, 0.0]
+        return await comp.solve_for("Tx")
+
+    message = asyncio.run(main())
+    assert "below the ground" in message
+    assert solver_api.calls == []
+    assert any(kind == "error" for kind, *_ in solver_api.toasts)
