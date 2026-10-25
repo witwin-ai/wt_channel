@@ -81,6 +81,7 @@ class RadioMapComponent(FieldComponent):
     _scene_key = ""
     _explicit_solving = False
     _applying_map = False
+    _quiet_volume = False
 
     # --- lock the inherited Field to a 2D XZ-plane solvable grid ---
     dimension = string_field("2D", options=["2D", "3D"], hidden=True)
@@ -350,7 +351,16 @@ class RadioMapComponent(FieldComponent):
         self._solver_result_handle = str((run.outputs or {}).get("resultHandle") or "")
         self._solver_run_id = run.run_id
         self._result = None
-        self.update_map()
+        self._quiet_volume = True  # several refreshes per second: no toast for each
+        try:
+            self.update_map()
+        finally:
+            self._quiet_volume = False
+
+    def _notify_volume_progress(self, *args, **kwargs):
+        if self._quiet_volume:
+            return None
+        return super()._notify_volume_progress(*args, **kwargs)
 
     @button(display_name="Update Map", group=_SCENE)
     def update_map(self):

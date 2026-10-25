@@ -167,3 +167,29 @@ def test_the_tx_asks_the_viewport_to_stream_its_drag():
 
     values = TxComponent().to_dict()["values"]
     assert values["live_drag"] is True
+
+
+def test_live_updates_do_not_toast_every_map_refresh(solver_api, monkeypatch):
+    # Each map refresh publishes the plane volume, and the core toasts "Volume Cached"
+    # for every publish: at several previews per second that floods the screen.
+    from witwin_server.core.components.scalar_grid_resource import ScalarGridResourcePublisher
+    import wt_channel.components.radiomap as radiomap_mod
+
+    toasts = []
+    monkeypatch.setattr(ScalarGridResourcePublisher, "_notify_volume_progress",
+                        lambda self, *a, **k: toasts.append(a))
+    monkeypatch.setattr(radiomap_mod.RadioMapComponent, "export_volume_data",
+                        lambda self, progress_id=None: self._notify_volume_progress(
+                            progress_id, "Cached", "cached", 0.2, "asset"))
+
+    async def main():
+        studio, tx, comp = _scene()
+        await comp.solve_for("Tx")
+        explicit = len(toasts)
+        _move(tx, 12.0)
+        await comp._live.idle()
+        return explicit
+
+    explicit = asyncio.run(main())
+    assert explicit == 1          # an explicit solve still reports its map
+    assert len(toasts) == explicit  # the preview and the refine stay quiet
