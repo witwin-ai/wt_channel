@@ -313,3 +313,36 @@ def test_manifest_contributes_tool_and_skill():
     skill = (root / "skills" / "radio-map" / "SKILL.md").read_text(encoding="utf-8")
     assert "witwin.channel.run_radiomap" in skill
     assert "witwin.streetmap.import_map" in skill
+
+
+def test_tool_solves_in_the_scene_named_by_scene_id(monkeypatch):
+    # In the combined Studio a radio map asked for while the user viewed a new Scene
+    # was planned and solved in the main Scene; Studio now passes the viewed Scene.
+    from wt_channel import agent_tools
+
+    main = _studio_with_map()
+    viewed = _studio_with_map()
+    _fake_solver(monkeypatch, np.full((2, 2), -80.0, np.float32))
+    tools = _FakeTools()
+    agent_tools.register(SimpleNamespace(tools=tools, api=SimpleNamespace(
+        scene=main, get_scene=lambda scene_id=None: {"main": main, "scene": viewed}.get(scene_id or "main"))))
+
+    asyncio.run(tools.registered[0].run({"resolution": 2, "scene_id": "scene"}))
+
+    def has_map(scene):
+        return any(o.get_component("RadioMap") is not None for o in scene.objects.values())
+
+    assert has_map(viewed) and not has_map(main)
+
+
+def test_tool_refuses_a_scene_that_is_not_open(monkeypatch):
+    from witwin_server.tools.base import ToolError
+    from wt_channel import agent_tools
+
+    _fake_solver(monkeypatch, np.zeros((1, 1), np.float32))
+    tools = _FakeTools()
+    agent_tools.register(SimpleNamespace(tools=tools, api=SimpleNamespace(
+        scene=_studio_with_map(), get_scene=lambda scene_id=None: None)))
+
+    with pytest.raises(ToolError, match="not open"):
+        asyncio.run(tools.registered[0].run({"scene_id": "gone"}))

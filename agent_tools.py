@@ -71,6 +71,8 @@ _INPUT_SCHEMA = {
                     "description": "Monte Carlo rays per transmitter. Default 1048576."},
         "max_bounces": {"type": "integer", "minimum": 0, "maximum": 5,
                         "description": "Reflection depth. Default 2."},
+        "scene_id": {"type": "string",
+                     "description": "Scene to solve in; Studio fills in the Scene the user is viewing."},
     },
     "additionalProperties": False,
 }
@@ -223,8 +225,17 @@ def _db_statistics(data: np.ndarray) -> Dict[str, Any]:
 
 # --- tool ------------------------------------------------------------------------
 
-def _resolve_scene(ctx: Any) -> Any:
-    scene = getattr(getattr(ctx, "api", None), "scene", None)
+def _resolve_scene(ctx: Any, scene_id: Any = None) -> Any:
+    # The radio map goes where the user is looking: Studio passes the viewed Scene.
+    # With ctx.api.scene alone a map asked for in a new Scene was solved in the main one.
+    api = getattr(ctx, "api", None)
+    if scene_id:
+        scene = api.get_scene(str(scene_id)) if api is not None else None
+        if scene is None:
+            raise ToolError(f"scene {scene_id!r} is not open", code="missing_scene",
+                            detail={"scene_id": str(scene_id)})
+        return scene
+    scene = getattr(api, "scene", None)
     if scene is None:
         raise ToolError("no active scene", code="no_scene")
     return scene
@@ -246,7 +257,7 @@ def make_run_radiomap_tool(ctx: Any) -> Tool:
         import asyncio
 
         opts = {**_DEFAULTS, **{k: v for k, v in (args or {}).items() if v is not None}}
-        scene = _resolve_scene(ctx)
+        scene = _resolve_scene(ctx, (args or {}).get("scene_id"))
         vertices = await asyncio.to_thread(scene_vertices, scene)
         if len(vertices) == 0:
             raise ToolError(
