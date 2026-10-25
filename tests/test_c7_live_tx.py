@@ -41,6 +41,7 @@ def host(monkeypatch):
 
     monkeypatch.setattr(solver_host.SolveRunner, "run", staticmethod(fake_run))
     solver_host._SCENES.clear()
+    monkeypatch.setattr(solver_host, "_LAST_SCENE_KEY", None)
     return SimpleNamespace(module=solver_host, seen=seen)
 
 

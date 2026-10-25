@@ -36,6 +36,8 @@ from wt_channel.adapter.solve import SolveRunner
 _SCENES: "OrderedDict[str, Any]" = OrderedDict()
 _MAX_SCENES = 2
 _HEAVY_GRID_CELLS = 128 * 128
+# The scene_key of the last radio map solve; a different one means another map.
+_LAST_SCENE_KEY = None
 
 
 def _scene_for(scene, config: Dict[str, Any]):
@@ -103,6 +105,11 @@ def solve(ctx, scene, config):
         return cache
     ctx.progress(0.0, "building Channel radiomap scene")
     scene = _scene_for(scene, config)
+    global _LAST_SCENE_KEY
+    key = str(config.get("scene_key") or "")
+    if key and _LAST_SCENE_KEY and key != _LAST_SCENE_KEY:
+        _forget_compiled_scenes()
+    _LAST_SCENE_KEY = key or _LAST_SCENE_KEY
     grid_shape = config.get("grid_shape")
     grid_shape = None if grid_shape is None else tuple(int(v) for v in grid_shape)
     # Coarse live previews stay small; only solves that can crowd the GPU release it.
@@ -111,11 +118,7 @@ def solve(ctx, scene, config):
     if heavy:
         _release_torch_cache()
     try:
-        if grid_shape is None:
-            result = SolveRunner.run(scene, comp, transmitter=transmitter, receiver=receiver)
-        else:
-            result = SolveRunner.run(scene, comp, transmitter=transmitter, receiver=receiver,
-                                     grid_shape=grid_shape)
+        result = _run_with_memory_retry(scene, comp, transmitter, receiver, grid_shape)
         ctx.progress(0.9, "extracting Channel radiomap cache")
         cache = _radiomap_cache(result)
     finally:
@@ -124,6 +127,44 @@ def solve(ctx, scene, config):
             _release_torch_cache()
     ctx.progress(1.0, "Channel radiomap solve complete")
     return cache
+
+
+def _run_with_memory_retry(scene, comp, transmitter, receiver, grid_shape):
+    """Solve; on a GPU out-of-memory error forget the compiled scenes and retry once."""
+    kwargs = {} if grid_shape is None else {"grid_shape": grid_shape}
+    try:
+        return SolveRunner.run(scene, comp, transmitter=transmitter, receiver=receiver, **kwargs)
+    except Exception as exc:  # noqa: BLE001 - only out-of-memory is retried
+        if not _out_of_memory(exc):
+            raise
+    # Outside the except block, so the failed attempt's frames (and tensors) are gone.
+    _forget_compiled_scenes()
+    return SolveRunner.run(scene, comp, transmitter=transmitter, receiver=receiver, **kwargs)
+
+
+def _out_of_memory(exc: BaseException) -> bool:
+    import torch
+
+    if isinstance(exc, torch.cuda.OutOfMemoryError):
+        return True
+    text = str(exc).lower()
+    return "out of memory" in text or "out_of_memory" in text or "memoryallocation" in text
+
+
+def _forget_compiled_scenes() -> None:
+    """Drop witwin-channel's compiled scenes and hand their GPU memory back.
+
+    witwin-channel keeps up to 32 compiled scenes (RayD acceleration structures and
+    edge caches on the GPU) in a process-wide LRU. Across ten maps in one Studio the
+    solver host grew to the whole 16 GB GPU and later maps ran out of memory.
+    """
+    import gc
+
+    from witwin.channel import scene as channel_scene
+
+    channel_scene.clear_compile_cache()
+    gc.collect()
+    _release_torch_cache()
 
 
 def _release_torch_cache() -> None:

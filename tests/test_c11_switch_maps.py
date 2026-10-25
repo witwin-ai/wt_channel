@@ -1,0 +1,88 @@
+"""C11 — switching maps hands the previous map's GPU memory back (CPU, fake solver).
+
+witwin-channel keeps up to 32 compiled scenes (RayD acceleration structures and edge
+caches on the GPU) in a process-wide LRU. Going through ten maps in one Studio, the
+solver host grew 2 -> 7.5 -> 10.7 -> 11.4 GB until MIT went "solver unresponsive" and
+Sydney ran out of memory even at a reduced grid. The host now forgets the compiled
+scenes of the previous map when a different Scene arrives, and on an out-of-memory
+error it forgets them and retries once.
+"""
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+
+
+class _Ctx:
+    def progress(self, *args, **kwargs):
+        pass
+
+
+def _studio_with_tx():
+    from witwin_server import Scene as StudioScene, SceneObject
+    from wt_channel.components.endpoints import TxComponent
+
+    studio = StudioScene()
+    tx = SceneObject(name="Radio Map Tx", mesh_type="Empty")
+    tx.add_component(TxComponent())
+    studio.add_object(tx)
+    return studio
+
+
+def _config(key, **extra):
+    return {"mode": "radiomap", "transmitter": "Radio Map Tx", "receiver": "Radio Map",
+            "component": {"solver": "deterministic"}, "scene_key": key, **extra}
+
+
+@pytest.fixture
+def host(monkeypatch):
+    import torch
+    import witwin.channel.scene as channel_scene
+    import wt_channel.solver_host as solver_host
+
+    events = SimpleNamespace(cleared=0, runs=0, fail=0)
+
+    def fake_run(scene, comp, *, transmitter, receiver, grid_shape=None):
+        events.runs += 1
+        if events.fail:
+            events.fail -= 1
+            raise torch.cuda.OutOfMemoryError("CUDA out of memory. Tried to allocate 2.00 GiB")
+        return SimpleNamespace(metrics=lambda: {"path_gain": np.ones((1, 2, 2), np.float32)})
+
+    def clear():
+        events.cleared += 1
+
+    monkeypatch.setattr(solver_host.SolveRunner, "run", staticmethod(fake_run))
+    monkeypatch.setattr(channel_scene, "clear_compile_cache", clear)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    solver_host._SCENES.clear()
+    monkeypatch.setattr(solver_host, "_LAST_SCENE_KEY", None)
+    return SimpleNamespace(module=solver_host, events=events)
+
+
+def test_a_different_map_forgets_the_previous_compiled_scenes(host):
+    host.module.solve(_Ctx(), _studio_with_tx(), _config("ucsd"))
+    host.module.solve(_Ctx(), None, _config("ucsd", tx_position=[1.0, 30.0, 0.0]))
+    assert host.events.cleared == 0  # dragging the Tx on one map keeps its compiled scene
+
+    host.module.solve(_Ctx(), _studio_with_tx(), _config("mit"))
+    assert host.events.cleared == 1
+
+
+def test_out_of_memory_forgets_compiled_scenes_and_retries_once(host):
+    host.events.fail = 1
+
+    cache = host.module.solve(_Ctx(), _studio_with_tx(), _config("sydney"))
+
+    assert host.events.runs == 2 and host.events.cleared == 1
+    assert cache.metrics["path_gain"].shape == (1, 2, 2)
+
+
+def test_a_second_out_of_memory_is_reported(host):
+    import torch
+
+    host.events.fail = 2
+
+    with pytest.raises(torch.cuda.OutOfMemoryError):
+        host.module.solve(_Ctx(), _studio_with_tx(), _config("sydney"))
+    assert host.events.runs == 2
