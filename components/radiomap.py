@@ -33,6 +33,7 @@ from witwin_server.core.components import (
     vector3_field,
 )
 from witwin_server.core.components.field_region import FREQUENCY_UNITS, FieldComponent
+from witwin_server.features.assets.binary.refs import VOLUME_FLOAT32_FORMAT
 from witwin_server.features.platform.bridge import FieldViz
 
 from ..adapter.common import json_value
@@ -85,6 +86,10 @@ class RadioMapComponent(FieldComponent):
     _explicit_solving = False
     _applying_map = False
     _ground_cache = None  # (scene_key, world vertices) for the below-ground Tx check
+    # Whether the next published map is a full-grid result (kept on disk for the next
+    # start) or a live preview / coarse pass (memory only), and the file kept last.
+    _persist_map = False
+    _persisted_asset = ""
 
     # --- lock the inherited Field to a 2D XZ-plane solvable grid ---
     dimension = string_field("2D", options=["2D", "3D"], hidden=True)
@@ -266,6 +271,7 @@ class RadioMapComponent(FieldComponent):
             self._solver_run_id = run.run_id
             self._scene_key = scene_key
             self._result = None
+            self._persist_map = True
             self.update_map()
         except Exception as exc:  # noqa: BLE001 - GPU solver boundary: notify, don't crash the button
             Notifications.error("Channel", f"{self.solver} solve failed: {exc}")
@@ -452,6 +458,7 @@ class RadioMapComponent(FieldComponent):
         self._solver_result_handle = str((run.outputs or {}).get("resultHandle") or "")
         self._solver_run_id = run.run_id
         self._result = None
+        self._persist_map = "grid_shape" not in config
         self.update_map()
         return "applied"
 
@@ -484,12 +491,48 @@ class RadioMapComponent(FieldComponent):
         try:
             self.set_volume_data(self._to_plane_volume(self._display_values(data)))  # normalizes + sets resolution
             self.set_field("render_mode", "Slices", force=True)
-            self.export_volume_data()                              # caches -> volume resource -> plane shows
+            self._export_map()                                     # volume resource -> plane shows
         finally:
             self._applying_map = False
         if bool(self.send_to_results):
             FieldViz.show_2d(data, title=label)
         return "Map updated"
+
+    def _export_map(self) -> None:
+        """Publish the plane; a full-grid result is also written to the project.
+
+        In-memory volume assets are gone after a restart while the saved Scene still
+        points at them, so every map Scene reopened showed only the green terrain. A
+        full result goes to ``.witwin/runtime/volumes`` (one file per RadioMap; the
+        previous one is removed); live previews and coarse passes stay in memory.
+        """
+        scene = getattr(self._owner, "scene", None)
+        handler = (getattr(getattr(scene, "_server", None), "handlers", None) or {}).get("binary_assets")
+        if not self._persist_map or handler is None or self._volume_data is None:
+            self.export_volume_data()
+            return
+        volume = self._volume_data
+        volume = volume.cpu().numpy() if hasattr(volume, "cpu") else np.asarray(volume)
+        data = np.ascontiguousarray(np.asarray(volume, dtype=np.float32).transpose(2, 1, 0))
+        current = str((self._values.get("volume") or {}).get("assetId") or "")
+        previous = self._persisted_asset or (current if current.startswith("radiomap-") else "")
+        asset_id = f"radiomap-{uuid.uuid4().hex[:12]}"
+        ref = handler.service.register_bytes(
+            kind="volume", format=VOLUME_FLOAT32_FORMAT, data=data.tobytes(), scene_id="default",
+            shape=[int(v) for v in volume.shape],
+            attributes={"dtype": "float32", "layout": "zyx_for_webgl3d", "normalized": True},
+            persistent=True, asset_id=asset_id,
+        )
+        self._publish_volume_ref(ref.to_dict())
+        self._persisted_asset = asset_id
+        if previous and previous != asset_id:
+            path = handler.service.resolve_file(previous)
+            handler.service.clear(previous)
+            if path is not None:
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
 
     def _on_own_grid(self, data2d: np.ndarray) -> np.ndarray:
         """A coarse map (live preview, first refine pass) on the RadioMap's own grid.
