@@ -170,13 +170,17 @@ class RadioMapComponent(FieldComponent):
     @button(display_name="Solve", group=_SCENE, operation="solver", cancellable=True,
             progress_surface="component")
     async def solve(self):
-        from ..adapter.channel_adapter import ChannelAdapter
-
-        scene = self._owner.scene
-        transmitter = self._resolve_transmitter(scene)
+        transmitter = self._resolve_transmitter(self._owner.scene)
         if transmitter is None:
             Notifications.error("Channel", "No transmitter found (add a Tx, or assign one).")
             return "Transmitter not found"
+        return await self.solve_for(transmitter)
+
+    async def solve_for(self, transmitter: str):
+        """Solve this map for the named Tx object (the Solve button and the Agent tool)."""
+        from ..adapter.channel_adapter import ChannelAdapter
+
+        scene = self._owner.scene
         if not ChannelAdapter.has_structures(scene):
             Notifications.error("Channel", "Radiomap solve needs at least one structure/mesh "
                                 "(e.g. a ground plane or building). Add geometry to the scene.")

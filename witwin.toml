@@ -12,6 +12,16 @@ enabled = true
 [engines]
 witwin = "^1.0.0"
 
+[[contributes.tools]]
+module = "agent_tools"
+register = "register"
+
+[[contributes.skills]]
+root = "skills"
+
+[permissions]
+tools = ["scene_write"]
+
 [[contributes.solvers]]
 id = "witwin.channel.radiomap"
 title = "Channel RadioMap"

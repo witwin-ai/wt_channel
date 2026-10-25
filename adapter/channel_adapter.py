@@ -150,16 +150,22 @@ class ChannelAdapter:
     @classmethod
     def _mesh_to_platform(cls, wc: Any, obj: SceneObject, scene_frequency: Optional[float]) -> Any:
         # Build a surface structure from a plain studio mesh + its full Transform.
+        return wc.Structure(cls.mesh_geometry(obj), cls._mesh_material(obj, scene_frequency),
+                            name=obj.name)
+
+    @staticmethod
+    def mesh_geometry(obj: SceneObject) -> Any:
+        """A plain studio mesh + its full Transform as a Core surface ``Mesh``."""
         import torch
+        import witwin.core as wc
 
         mesh = obj.get_component("Mesh")
         transform = obj.get_component("Transform")
         verts = torch.as_tensor(mesh.get_vertices_numpy().reshape(-1, 3), dtype=torch.float32)
         faces = torch.as_tensor(mesh.get_faces_numpy().reshape(-1, 3).astype("int64"))
-        geometry = wc.Mesh(verts, faces, position=vec(transform.position),
-                           rotation=TransformMap.euler_to_quat(transform.rotation),
-                           scale=vec(transform.scale), recenter=False, fill_mode="surface")
-        return wc.Structure(geometry, cls._mesh_material(obj, scene_frequency), name=obj.name)
+        return wc.Mesh(verts, faces, position=vec(transform.position),
+                       rotation=TransformMap.euler_to_quat(transform.rotation),
+                       scale=vec(transform.scale), recenter=False, fill_mode="surface")
 
     @staticmethod
     def _mesh_material(obj: SceneObject, scene_frequency: Optional[float]) -> Any:
