@@ -1,181 +1,169 @@
-"""C2 — endpoints + antenna arrays round-trip (CPU).
+"""C2 — endpoints on the Core 0.4 world (CPU).
 
-Per-endpoint round-trip (Transmitter / Receiver / ReceiverGrid) including position,
-polarization, power, orientation (yaw/pitch/roll), and the antenna array; ReceiverGrid
-grid_shape XOR cell_size; ULA / UPA reconstruction; and the scene-default array
-fallback resolution order.
+A ``ChannelTx`` object becomes a ``witwin.core.AntennaState`` (role ``tx``), a
+``ChannelRx`` object a point ``AntennaState`` (role ``rx``), and a ``RadioMap`` object a
+``witwin.core.ReceiverGrid`` whose samples are the Field-region cell centers. The grid
+axes follow the RadioMap plane's tangential world axes (u -> ``x_axis``, v -> ``y_axis``)
+so a solved ``(T, n_v, n_u)`` map keeps the ``data[iv, iu]`` layout the plane visualizer
+expects. Only the plain single isotropic element is ported; other antennas fail loudly.
 """
 import numpy as np
 import pytest
-from witwin.core import Box, Material, Structure
-
-from _helpers import RT
 
 
-def _scene(*, transmitters=(), receivers=(), tx_array=None, rx_array=None):
-    import witwin.channel as ch
-    return ch.Scene(
-        structures=[Structure(Box(size=(2, 2, 0.2)), Material.from_itu("concrete"), name="g")],
-        transmitters=list(transmitters), receivers=list(receivers),
-        tx_array=tx_array, rx_array=rx_array, frequency=3.5e9, device="cpu",
-    )
+def _studio():
+    from witwin_server import Scene as StudioScene
+    return StudioScene()
 
 
-def test_transmitter_roundtrip(adapter):
-    import witwin.channel as ch
-    tx = ch.Transmitter(name="tx", position=(1.0, 2.0, 3.0), polarization=(0.0, 0.0, 1.0),
-                        power=2.5, orientation=(0.1, 0.2, 0.3))
-    rebuilt = RT.by_name(RT.back(adapter, _scene(transmitters=[tx])).transmitters)["tx"]
-    np.testing.assert_allclose(rebuilt.position, (1.0, 2.0, 3.0), atol=1e-4)
-    np.testing.assert_allclose(rebuilt.polarization, (0.0, 0.0, 1.0), atol=1e-4)
-    assert float(rebuilt.power) == pytest.approx(2.5)
-    np.testing.assert_allclose(rebuilt.orientation, (0.1, 0.2, 0.3), atol=1e-4)
-
-
-def test_receiver_optional_fields_default_none(adapter):
-    import witwin.channel as ch
-    rx = ch.Receiver(name="rx", position=(4.0, 5.0, 6.0))
-    rebuilt = RT.by_name(RT.back(adapter, _scene(receivers=[rx])).receivers)["rx"]
-    np.testing.assert_allclose(rebuilt.position, (4.0, 5.0, 6.0), atol=1e-4)
-    assert rebuilt.polarization is None
-    assert rebuilt.orientation is None
-
-
-def test_receiver_grid_grid_shape_roundtrip(adapter):
-    import witwin.channel as ch
-    grid = ch.ReceiverGrid(name="rm", axis="z", position=1.5, bounds=((-6, 6), (-4, 4)),
-                           grid_shape=(20, 16))
-    rebuilt = RT.by_name(RT.back(adapter, _scene(receivers=[grid])).receivers)["rm"]
-    assert rebuilt.axis == "z"
-    assert float(rebuilt.position) == pytest.approx(1.5)
-    assert rebuilt.bounds == ((-6.0, 6.0), (-4.0, 4.0))
-    assert rebuilt.grid_shape == (20, 16)
-    assert rebuilt.cell_size is None
-
-
-def test_receiver_grid_cell_size_resolves_to_counts(adapter):
-    import witwin.channel as ch
-    # The RadioMap (Field) stores grid resolution as counts, so a cell_size grid
-    # round-trips as the equivalent grid_shape (extent / cell_size).
-    grid = ch.ReceiverGrid(name="rm", axis="x", position=0.0, bounds=((-5, 5), (-5, 5)),
-                           cell_size=(0.25, 0.5))
-    rebuilt = RT.by_name(RT.back(adapter, _scene(receivers=[grid])).receivers)["rm"]
-    assert rebuilt.axis == "x"
-    assert rebuilt.grid_shape == (40, 20)  # 10m / 0.25, 10m / 0.5
-    assert rebuilt.cell_size is None
-
-
-def test_radiomap_resolution_mode_defaults_to_256_grid_shape():
-    import witwin.channel as ch
+def _tx(name="tx", position=(1.0, 2.0, 3.0)):
     from witwin_server.core import SceneObject
-    from wt_channel.adapter.endpoint_map import EndpointMap
+    from wt_channel.components.endpoints import TxComponent
+
+    obj = SceneObject(name=name, mesh_type="Empty")
+    comp = obj.add_component(TxComponent())
+    obj.get_component("Transform").position = list(position)
+    return obj, comp
+
+
+def _radiomap(name="rm", position=(5.0, 1.5, -3.0)):
+    from witwin_server.core import SceneObject
     from wt_channel.components.radiomap import RadioMapComponent
 
-    obj = SceneObject(name="rm", mesh_type="Empty")
+    obj = SceneObject(name=name, mesh_type="Empty")
     comp = obj.add_component(RadioMapComponent())
+    obj.get_component("Transform").position = list(position)
+    return obj, comp
 
-    grid = EndpointMap.radiomap_to_platform(ch, obj)
+
+def test_transmitter_becomes_core_antenna_state():
+    from witwin.core import AntennaState
+    from wt_channel.adapter.endpoint_map import EndpointMap
+
+    obj, comp = _tx()
+    comp.polarization = [0.0, 1.0, 0.0]
+    comp.power = 2.5
+    comp.use_orientation = True
+    comp.orientation = [0.1, 0.2, 0.3]
+
+    tx = EndpointMap.tx_to_platform(obj)
+
+    assert isinstance(tx, AntennaState)
+    assert tx.role == "tx"
+    assert tx.metadata["name"] == "tx"
+    np.testing.assert_allclose(tx.position.tolist(), [1.0, 2.0, 3.0], atol=1e-6)
+    np.testing.assert_allclose(tx.polarization.tolist(), [0.0, 1.0, 0.0], atol=1e-6)
+    assert float(tx.power_w) == pytest.approx(2.5)
+    np.testing.assert_allclose(tx.orientation.tolist(), [0.1, 0.2, 0.3], atol=1e-6)
+    assert tx.pattern.kind == "isotropic"
+
+
+def test_receiver_optional_fields_default_none():
+    from witwin_server.core import SceneObject
+    from wt_channel.adapter.endpoint_map import EndpointMap
+    from wt_channel.components.endpoints import RxComponent
+
+    obj = SceneObject(name="rx", mesh_type="Empty")
+    obj.add_component(RxComponent())
+    obj.get_component("Transform").position = [4.0, 5.0, 6.0]
+
+    rx = EndpointMap.rx_to_platform(obj)
+
+    assert rx.role == "rx"
+    np.testing.assert_allclose(rx.position.tolist(), [4.0, 5.0, 6.0], atol=1e-6)
+    assert rx.polarization is None
+    assert rx.orientation is None
+
+
+def test_radiomap_becomes_receiver_grid_on_cell_centers():
+    from witwin.core import ReceiverGrid
+    from wt_channel.adapter.endpoint_map import EndpointMap
+
+    obj, comp = _radiomap()
+    comp.min_bound = [-10.0, 0.0, -20.0]
+    comp.max_bound = [10.0, 0.0, 20.0]
+    comp.resolution = [4.0, 1.0, 8.0]
+
+    grid = EndpointMap.radiomap_to_platform(obj)
+
+    assert isinstance(grid, ReceiverGrid)
+    assert grid.metadata["name"] == "rm"
+    assert grid.shape == (4, 8)  # (n_u = X, n_v = Z)
+    np.testing.assert_allclose(grid.x_axis.tolist(), [1.0, 0.0, 0.0])
+    np.testing.assert_allclose(grid.y_axis.tolist(), [0.0, 0.0, 1.0])
+    np.testing.assert_allclose(grid.spacing.tolist(), [5.0, 5.0])
+    # min corner (-5, 1.5, -23) plus half a cell on each tangential axis.
+    np.testing.assert_allclose(grid.position.tolist(), [-2.5, 1.5, -20.5], atol=1e-6)
+
+
+def test_radiomap_resolution_mode_defaults_to_256_grid():
+    from wt_channel.adapter.endpoint_map import EndpointMap
+
+    obj, comp = _radiomap()
+
+    grid = EndpointMap.radiomap_to_platform(obj)
 
     assert str(comp.grid_mode) == "Resolution"
-    np.testing.assert_allclose(np.asarray(comp.resolution, dtype=np.float32), [256.0, 1.0, 256.0])
-    assert grid.grid_shape == (256, 256)
-    assert grid.cell_size is None
+    assert grid.shape == (256, 256)
 
 
 def test_radiomap_ppw_mode_derives_grid_shape_from_bounds_and_wavelength():
-    import witwin.channel as ch
-    from witwin_server.core import SceneObject
     from wt_channel.adapter.endpoint_map import EndpointMap
-    from wt_channel.components.radiomap import RadioMapComponent
 
-    obj = SceneObject(name="rm", mesh_type="Empty")
-    comp = obj.add_component(RadioMapComponent())
+    obj, comp = _radiomap()
     comp.grid_mode = "PPW"
     comp.points_per_wavelength = 4.0
     comp.frequency = 299792458.0
     comp.min_bound = [-10.0, 0.0, -5.0]
     comp.max_bound = [10.0, 0.0, 5.0]
 
-    grid = EndpointMap.radiomap_to_platform(ch, obj)
+    grid = EndpointMap.radiomap_to_platform(obj)
 
-    assert grid.bounds == ((-10.0, 10.0), (-5.0, 5.0))
-    assert grid.grid_shape == (80, 40)
-    assert grid.cell_size is None
-
-
-def test_ula_array_roundtrip(adapter):
-    import witwin.channel as ch
-    tx = ch.Transmitter(name="tx", position=(0, 0, 2),
-                        array=ch.ULA(num_elements=4, spacing=0.5, axis="y", pattern="dipole"))
-    rebuilt = RT.by_name(RT.back(adapter, _scene(transmitters=[tx])).transmitters)["tx"]
-    arr = rebuilt.array
-    assert isinstance(arr, ch.ULA)
-    assert arr.num_elements == 4
-    assert arr.pattern == "dipole"
-    np.testing.assert_allclose([float(v) for v in arr.element_positions.y],
-                               [-0.75, -0.25, 0.25, 0.75], atol=1e-4)
+    assert grid.shape == (80, 40)
+    np.testing.assert_allclose(grid.spacing.tolist(), [0.25, 0.25])
 
 
-def test_upa_array_roundtrip(adapter):
-    import witwin.channel as ch
-    tx = ch.Transmitter(name="tx", position=(0, 0, 2),
-                        array=ch.UPA(num_rows=2, num_cols=3, vertical_spacing=0.4,
-                                     horizontal_spacing=0.6, polarization="vh"))
-    rebuilt = RT.by_name(RT.back(adapter, _scene(transmitters=[tx])).transmitters)["tx"]
-    arr = rebuilt.array
-    assert isinstance(arr, ch.UPA)
-    assert (arr.num_rows, arr.num_cols) == (2, 3)
-    assert arr.num_elements == 6
-    assert arr.polarization_slots == (((1 + 0j), 0j, 0j), (0j, (1 + 0j), 0j))
+@pytest.mark.parametrize("field,value", [("array_kind", "ula"), ("pattern", "dipole")])
+def test_unported_antenna_fails_loudly(field, value):
+    from wt_channel.adapter.endpoint_map import EndpointMap
+
+    obj, comp = _tx()
+    setattr(comp, field, value)
+
+    with pytest.raises(ValueError, match="not supported"):
+        EndpointMap.tx_to_platform(obj)
 
 
-def test_custom_array_roundtrip(adapter):
-    import witwin.channel as ch
-    tx = ch.Transmitter(name="tx", position=(0, 0, 2),
-                        array=ch.AntennaArray(element_positions=[(0, 0, 0), (0.1, 0.2, 0.3)],
-                                              polarization="cross"))
-    rebuilt = RT.by_name(RT.back(adapter, _scene(transmitters=[tx])).transmitters)["tx"]
-    arr = rebuilt.array
-    assert arr.num_elements == 2
-    np.testing.assert_allclose([float(v) for v in arr.element_positions.x], [0.0, 0.1], atol=1e-4)
-    assert arr.polarization_slots == ch.AntennaArray(
-        element_positions=[(0, 0, 0)], polarization="cross").polarization_slots
+def test_grid_roundtrips_through_studio():
+    from wt_channel.adapter.endpoint_map import EndpointMap
+
+    obj, comp = _radiomap()
+    comp.min_bound = [-6.0, 0.0, -4.0]
+    comp.max_bound = [6.0, 0.0, 4.0]
+    comp.resolution = [12.0, 1.0, 16.0]
+    grid = EndpointMap.radiomap_to_platform(obj)
+
+    rebuilt_obj = EndpointMap.radiomap_to_studio(grid, frequency=2.4e9)
+    rebuilt = EndpointMap.radiomap_to_platform(rebuilt_obj)
+
+    assert rebuilt_obj.name == "rm"
+    assert rebuilt.shape == grid.shape
+    np.testing.assert_allclose(rebuilt.position.tolist(), grid.position.tolist(), atol=1e-5)
+    np.testing.assert_allclose(rebuilt.spacing.tolist(), grid.spacing.tolist(), atol=1e-6)
+    assert float(rebuilt_obj.get_component("RadioMap").frequency) == pytest.approx(2.4e9)
 
 
-def test_custom_complex_polarization_roundtrip(adapter):
-    import witwin.channel as ch
-    slots = [(1 + 0j, 0.5j, 0j)]
-    tx = ch.Transmitter(name="tx", position=(0, 0, 2),
-                        array=ch.AntennaArray(element_positions=[(0, 0, 0)], polarization=slots))
-    rebuilt = RT.by_name(RT.back(adapter, _scene(transmitters=[tx])).transmitters)["tx"]
-    assert rebuilt.array.polarization_slots == (((1 + 0j), 0.5j, 0j),)
+def test_transmitter_roundtrips_through_studio():
+    from wt_channel.adapter.endpoint_map import EndpointMap
 
+    obj, comp = _tx(position=(7.0, 8.0, 9.0))
+    comp.power = 3.0
+    comp.polarization = [0.0, 1.0, 0.0]
+    tx = EndpointMap.tx_to_platform(obj)
 
-def test_tx_default_array_roundtrips_to_none(adapter):
-    import witwin.channel as ch
-    # A plain Tx (single iso/V element) exports no explicit array -> platform default.
-    tx = ch.Transmitter(name="tx", position=(0, 0, 2))
-    rebuilt = RT.by_name(RT.back(adapter, _scene(transmitters=[tx])).transmitters)["tx"]
-    assert rebuilt.array is None
+    rebuilt = EndpointMap.tx_to_platform(EndpointMap.tx_to_studio(tx))
 
-
-def test_scene_default_array_baked_into_endpoint(adapter):
-    import witwin.channel as ch
-    # No more scene-default arrays: the default is baked into each endpoint that lacks one.
-    tx = ch.Transmitter(name="tx", position=(0, 0, 2))
-    scene = _scene(transmitters=[tx], tx_array=ch.ULA(num_elements=8, spacing=0.5, axis="x"))
-    rebuilt = RT.back(adapter, scene)
-    assert rebuilt.tx_array is None
-    arr = rebuilt.transmitter("tx").array
-    assert isinstance(arr, ch.ULA)
-    assert arr.num_elements == 8
-
-
-def test_endpoint_array_overrides_scene_default(adapter):
-    import witwin.channel as ch
-    # An explicit endpoint array wins over the scene default (which is then ignored).
-    tx = ch.Transmitter(name="tx", position=(0, 0, 2),
-                        array=ch.ULA(num_elements=2, spacing=0.5, axis="x"))
-    scene = _scene(transmitters=[tx], tx_array=ch.ULA(num_elements=8, spacing=0.5, axis="x"))
-    rebuilt = RT.back(adapter, scene)
-    assert rebuilt.transmitter("tx").array.num_elements == 2
+    np.testing.assert_allclose(rebuilt.position.tolist(), [7.0, 8.0, 9.0], atol=1e-6)
+    np.testing.assert_allclose(rebuilt.polarization.tolist(), [0.0, 1.0, 0.0], atol=1e-6)
+    assert float(rebuilt.power_w) == pytest.approx(3.0)
+    assert rebuilt.metadata["name"] == "tx"

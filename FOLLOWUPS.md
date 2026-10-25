@@ -1,5 +1,20 @@
 # wt-channel — follow-ups (Phase C5) & verification notes
 
+## witwin-channel 0.5 port (2026-10-25)
+
+The radiomap path (adapter, ITU presets, Tx / Rx / RadioMap endpoints, deterministic +
+Monte Carlo basic / BDPT configs, solver host) targets witwin-channel 0.5 / witwin-core
+0.4. Not ported yet:
+
+- **Point-to-point path solver** (`adapter/path_solve.py`, `components/pathsolver.py`,
+  `tests/test_c4_path.py`) still calls the 0.3 API and fails until ported.
+- **Antenna arrays / patterns**: only the single isotropic element maps to
+  `AntennaState`; ULA / UPA / custom arrays and dipole / TR 38.901 patterns raise.
+- **Dropped 0.3 knobs**: tuning (resolution wavelength, solver mode, memory profile,
+  reflection backend), integrator options (RR, stop threshold, accumulation backend),
+  power-domain filtering, edge policy and stratified quadrature have no 0.5 config.
+  The RadioMap fields stay for saved scenes but no longer reach the solver.
+
 ## Live-solve verification status (CUDA, conda `witwin2`)
 
 Round-trip + config building are fully tested on CPU. The live GPU solves are gated

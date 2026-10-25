@@ -1,83 +1,194 @@
-"""C0 — scene config + structures round-trip (CPU, scalar materials).
+"""C0 — the Studio scene as a Core 0.4 world (CPU).
 
-Builds a ``channel.Scene`` with a frequency and three structures (scalar materials,
-priorities, tags), runs platform -> studio -> platform, and asserts the rebuilt scene
-reproduces the frequency, device, and each structure's geometry args, material, and
-metadata.
+``ChannelAdapter.build`` turns the live Studio scene into an immutable
+``witwin.core.Scene``: platform-geometry objects and plain Studio meshes (e.g. an
+imported street map) become ``Structure`` s, Tx / Rx / RadioMap objects become
+endpoints. Plain meshes default to ITU concrete at the solve frequency; an explicit
+``MaterialPreset`` or a named scalar ``Material`` wins. The channel config rides the
+world's metadata so a Core world round-trips through Studio.
 """
 import numpy as np
 import pytest
-from witwin.core import Box, Cylinder, Material, Sphere, Structure
-
-from _helpers import RT
+import torch
 
 
-@pytest.fixture
-def scene(device):
-    import witwin.channel as ch
-    return ch.Scene(
-        structures=[
-            Structure(Box(size=(4.0, 4.0, 0.2), position=(0.0, 0.0, 0.0)),
-                      Material(eps_r=5.24, sigma_e=0.12, name="ground"),
-                      name="ground", priority=3, tags=("floor", "static")),
-            Structure(Sphere(radius=1.5, position=(3.0, 0.0, 1.0)),
-                      Material(eps_r=2.7, sigma_e=0.0, name="ball"),
-                      name="ball", enabled=False),
-            Structure(Cylinder(radius=0.4, height=3.0, axis="z", position=(-2.0, 1.0, 1.5)),
-                      Material(eps_r=3.9, sigma_e=0.01), name="post"),
-        ],
-        frequency=3.5e9, device="cpu",
-    )
+def _studio():
+    from witwin_server import Scene as StudioScene
+    return StudioScene()
 
 
-def test_scene_config_roundtrip(adapter, scene):
-    rebuilt = RT.back(adapter, scene)
-    assert rebuilt.frequency == pytest.approx(3.5e9)
-    assert str(rebuilt.device) == "cpu"
+def _quad_mesh(name="ground", *, position=(0.0, 0.0, 0.0), scale=(1.0, 1.0, 1.0)):
+    from witwin_server import SceneObject
+
+    obj = SceneObject(name=name, mesh_type="Custom")
+    vertices = np.array([[-1, 0, -1], [1, 0, -1], [1, 0, 1], [-1, 0, 1]], dtype=np.float32)
+    faces = np.array([[0, 2, 1], [0, 3, 2]], dtype=np.uint32)
+    obj.get_component("Mesh").set_mesh_data(vertices, faces, notify=False)
+    transform = obj.get_component("Transform")
+    transform.position = list(position)
+    transform.scale = list(scale)
+    return obj
 
 
-def test_noise_power_roundtrip(adapter, device):
-    import witwin.channel as ch
-    scene = ch.Scene(structures=[Structure(Box(size=(1, 1, 1)), Material(), name="b")],
-                     frequency=1e9, device="cpu")
-    scene.noise_power = 2.5e-13
-    rebuilt = RT.back(adapter, scene)
-    assert float(rebuilt.noise_power) == pytest.approx(2.5e-13)
+def _add_tx(studio, name="tx", position=(0.0, 10.0, 0.0)):
+    from witwin_server.core import SceneObject
+    from wt_channel.components.endpoints import TxComponent
+
+    obj = SceneObject(name=name, mesh_type="Empty")
+    obj.add_component(TxComponent())
+    obj.get_component("Transform").position = list(position)
+    studio.add_object(obj)
+    return obj
 
 
-def test_structure_count_and_names(adapter, scene):
-    rebuilt = RT.back(adapter, scene)
-    assert RT.by_name(rebuilt.structures).keys() == {"ground", "ball", "post"}
+def _add_radiomap(studio, name="rm"):
+    from witwin_server.core import SceneObject
+    from wt_channel.components.radiomap import RadioMapComponent
+
+    obj = SceneObject(name=name, mesh_type="Empty")
+    comp = obj.add_component(RadioMapComponent())
+    comp.resolution = [4.0, 1.0, 4.0]
+    studio.add_object(obj)
+    return obj
 
 
-def test_structure_geometry_roundtrip(adapter, scene):
-    rebuilt = RT.by_name(RT.back(adapter, scene).structures)
-    original = RT.by_name(scene.structures)
-    for name in original:
-        RT.assert_geom(rebuilt[name].geometry, original[name].geometry)
+def test_build_returns_core_world_with_mesh_tx_and_grid(adapter):
+    from witwin.core import ReceiverGrid, Scene
+
+    studio = _studio()
+    studio.add_object(_quad_mesh())
+    _add_tx(studio)
+    _add_radiomap(studio)
+
+    world = adapter.build(studio, frequency=3.5e9)
+
+    assert isinstance(world, Scene)
+    assert [s.name for s in world.structures] == ["ground"]
+    roles = sorted(endpoint.role for endpoint in world.endpoints)
+    assert roles == ["rx", "tx"]
+    assert any(isinstance(endpoint, ReceiverGrid) for endpoint in world.endpoints)
+    assert world.metadata["channel"]["frequency_hz"] == pytest.approx(3.5e9)
 
 
-def test_structure_material_roundtrip(adapter, scene):
-    rebuilt = RT.by_name(RT.back(adapter, scene).structures)
-    original = RT.by_name(scene.structures)
-    for name in original:
-        RT.assert_material(rebuilt[name].material, original[name].material)
+def test_plain_mesh_defaults_to_itu_concrete_at_frequency(adapter):
+    studio = _studio()
+    studio.add_object(_quad_mesh())
+
+    material = adapter.build(studio, frequency=3.5e9).structures[0].material
+
+    assert material.name == "concrete"
+    assert float(material.sigma_e) == pytest.approx(0.0462 * 3.5 ** 0.7822)
 
 
-def test_structure_metadata_roundtrip(adapter, scene):
-    rebuilt = RT.by_name(RT.back(adapter, scene).structures)
-    assert int(rebuilt["ground"].priority) == 3
-    assert set(rebuilt["ground"].tags) == {"floor", "static"}
-    assert rebuilt["ball"].enabled is False
-    assert rebuilt["post"].enabled is True
+def test_plain_mesh_world_vertices_apply_transform(adapter):
+    studio = _studio()
+    studio.add_object(_quad_mesh(position=(10.0, 2.0, -5.0), scale=(3.0, 1.0, 2.0)))
+
+    geometry = adapter.build(studio, frequency=3.5e9).structures[0].geometry
+    world = geometry.world_vertices.detach().cpu().numpy()
+
+    np.testing.assert_allclose(world.min(axis=0), [7.0, 2.0, -7.0], atol=1e-5)
+    np.testing.assert_allclose(world.max(axis=0), [13.0, 2.0, -3.0], atol=1e-5)
+
+
+def test_material_preset_overrides_default(adapter):
+    from wt_channel.components.materials import MaterialPresetComponent
+
+    studio = _studio()
+    obj = _quad_mesh()
+    preset = obj.add_component(MaterialPresetComponent())
+    preset.preset = "metal"
+    studio.add_object(obj)
+
+    material = adapter.build(studio, frequency=3.5e9).structures[0].material
+
+    assert material.name == "metal"
+    assert float(material.sigma_e) == pytest.approx(1.0e7)
+
+
+def test_studio_itu_pick_is_evaluated_at_frequency(adapter):
+    studio = _studio()
+    obj = _quad_mesh()
+    obj.get_component("Material").material_name = "Very dry ground"
+    studio.add_object(obj)
+
+    material = adapter.build(studio, frequency=3.5e9).structures[0].material
+
+    assert material.name == "very_dry_ground"
+    assert float(material.sigma_e) == pytest.approx(0.00015 * 3.5 ** 2.52)
+
+
+def test_hand_edited_scalars_win_over_default(adapter):
+    studio = _studio()
+    obj = _quad_mesh()
+    material_comp = obj.get_component("Material")
+    material_comp.eps_r = [3.0, 0.0]
+    material_comp.sigma_e = 0.5
+    studio.add_object(obj)
+
+    material = adapter.build(studio, frequency=3.5e9).structures[0].material
+
+    assert float(np.real(material.eps_r)) == pytest.approx(3.0)
+    assert float(material.sigma_e) == pytest.approx(0.5)
+
+
+def test_material_preset_band_is_validated(adapter):
+    from wt_channel.components.materials import MaterialPresetComponent
+
+    studio = _studio()
+    obj = _quad_mesh()
+    obj.add_component(MaterialPresetComponent()).preset = "very_dry_ground"
+    studio.add_object(obj)
+
+    with pytest.raises(ValueError, match="very_dry_ground"):
+        adapter.build(studio, frequency=50e9)
+
+
+def test_build_filters_to_named_transmitter_and_receiver(adapter):
+    studio = _studio()
+    studio.add_object(_quad_mesh())
+    _add_tx(studio, "tx_a", (0.0, 5.0, 0.0))
+    _add_tx(studio, "tx_b", (9.0, 5.0, 0.0))
+    _add_radiomap(studio, "rm_a")
+    _add_radiomap(studio, "rm_b")
+
+    world = adapter.build(studio, frequency=3.5e9, transmitter="tx_b", receiver="rm_a")
+
+    names = sorted(endpoint.metadata["name"] for endpoint in world.endpoints)
+    assert names == ["rm_a", "tx_b"]
+
+
+def test_has_structures_counts_plain_meshes(adapter):
+    studio = _studio()
+    assert adapter.has_structures(studio) is False
+    studio.add_object(_quad_mesh())
+    assert adapter.has_structures(studio) is True
 
 
 def test_export_empty_scene_is_empty(adapter):
-    # Config now rides RadioMap / PathSolver; an empty studio scene exports an empty
-    # channel scene (default frequency) rather than raising.
-    from witwin_server import Scene as StudioScene
-    empty = StudioScene()
-    scene = adapter.to_platform(empty)
-    assert list(scene.structures) == []
-    assert list(scene.transmitters) == []
-    assert list(scene.receivers) == []
+    world = adapter.to_platform(_studio())
+    assert tuple(world.structures) == ()
+    assert tuple(world.endpoints) == ()
+
+
+def test_detect_claims_only_core_worlds_with_endpoints(adapter):
+    from witwin.core import AntennaState, Scene
+
+    tx = AntennaState(1, "tx", torch.tensor([0.0, 1.0, 0.0]), metadata={"name": "tx"})
+    assert adapter.detect(Scene(endpoints=[tx])) is True
+    assert adapter.detect(Scene()) is False
+    assert adapter.detect(object()) is False
+
+
+def test_core_world_roundtrips_through_studio(adapter):
+    studio = _studio()
+    studio.add_object(_quad_mesh())
+    _add_tx(studio)
+    _add_radiomap(studio)
+    world = adapter.build(studio, frequency=2.4e9)
+
+    rebuilt = adapter.to_platform(adapter.to_studio(world))
+
+    assert [s.name for s in rebuilt.structures] == ["ground"]
+    assert sorted(e.metadata["name"] for e in rebuilt.endpoints) == ["rm", "tx"]
+    assert rebuilt.metadata["channel"]["frequency_hz"] == pytest.approx(2.4e9)

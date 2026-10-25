@@ -1,25 +1,29 @@
 """Solver hand-off + radiomap extraction (master §6 / §7).
 
-``SolveRunner`` is the export->solve half of the edit loop: it rebuilds the platform
-``channel.Scene`` from the live studio scene (via :class:`ChannelAdapter`), resolves
-the transmitter + receiver-grid by name, and runs the chosen family —
-``deterministic.solve`` or ``montecarlo.solve`` — both of which share the entry shape
-``solve(*, scene, transmitter, receiver, config) -> RadioMapResult`` and require
-``scene.frequency`` plus CUDA RayD/OptiX.
+``SolveRunner`` is the export->solve half of the edit loop: it rebuilds the Core world
+from the live studio scene (via :class:`ChannelAdapter`), restricted to the chosen
+transmitter + receiver grid, and runs the chosen witwin-channel 0.5 family —
+``deterministic``, ``montecarlo.basic`` or ``montecarlo.bdpt`` — all of which share the
+entry shape ``solve(scene, config, *, reference_frequency_hz)`` and need CUDA RayD.
 
-``ConfigBuilder`` reads the ``ChannelResult`` component's curated fields into the
-platform ``Config`` / ``Tuning`` / ``IntegratorOptions`` / ``FilterConfig`` /
-``EdgePolicy``. ``RadioMapExtractor`` turns a ``RadioMapResult`` into a 2D numpy map
-(+ extent) for the Results-panel / figure surfaces. Result tensors are runtime state —
-never serialized into the scene.
+``ConfigBuilder`` reads the RadioMap component's curated fields into the solver
+``Config``. witwin-channel 0.5 dropped the 0.3 tuning / integrator-option / filter /
+edge-policy knobs; the component keeps those fields for saved scenes, but only depth,
+diffraction order, sample count and seed reach the solver now. ``RadioMapMaps`` holds
+the solved ``(T, n_v, n_u)`` path gain and derives ``rss`` / ``sinr``;
+``RadioMapExtractor`` turns it into a 2D numpy map (+ extent) for the Results-panel /
+figure surfaces. Result tensors are runtime state — never serialized into the scene.
 """
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
 from .channel_adapter import ChannelAdapter
-from .common import num, vec
+from .common import num
+
+# The public diffraction capability of every 0.5 solver is first order.
+_MAX_DIFFRACTION_ORDER = 1
 
 
 @dataclass
@@ -31,145 +35,118 @@ class MapImage:
     label: str
 
 
+@dataclass
+class RadioMapMaps:
+    """Solved radiomap: ``path_gain`` is ``(T, n_v, n_u)``; ``tx_power_w`` is ``(T,)``."""
+
+    path_gain: np.ndarray
+    tx_power_w: np.ndarray
+    noise_power_w: Optional[float] = None
+
+    def metrics(self) -> Dict[str, np.ndarray]:
+        """Every metric this solve supports, by name."""
+        names = ["path_gain", "rss"] + (["sinr"] if self.noise_power_w else [])
+        return {name: self.metric(name) for name in names}
+
+    def metric(self, name: str) -> np.ndarray:
+        """``path_gain`` (linear), ``rss`` (W) or ``sinr`` (linear, needs noise power)."""
+        gain = np.asarray(self.path_gain, dtype=np.float32)
+        if name == "path_gain":
+            return gain
+        rss = gain * np.asarray(self.tx_power_w, dtype=np.float32).reshape(-1, 1, 1)
+        if name == "rss":
+            return rss
+        if name == "sinr":
+            if not self.noise_power_w:
+                raise ValueError("sinr needs a noise power (enable use_noise_power)")
+            return rss / np.float32(self.noise_power_w)
+        raise ValueError(f"unknown radiomap metric: {name}")
+
+
+def _components(max_bounces: int, diffraction_order: int) -> frozenset:
+    components = {"los"}
+    if max_bounces > 0:
+        components.add("reflection")
+    if diffraction_order > 0:
+        components.add("diffraction")
+    return frozenset(components)
+
+
 class ConfigBuilder:
-    """Read the ``ChannelResult`` component into platform solver configs."""
-
-    _MC_ACCUMULATION_DEFAULT = "auto"
+    """Read the RadioMap component into witwin-channel 0.5 solver configs."""
 
     @staticmethod
-    def _str_field(comp: Any, name: str, default: str) -> str:
-        value = getattr(comp, name, None)
-        return default if value is None or value == "" else str(value)
-
-    @staticmethod
-    def edge_policy(ch: Any, comp: Any) -> Any:
-        # Shared diffraction-edge policy; edge_diffraction 'default' leaves it to the platform.
-        kwargs = {
-            "vertical_ratio": num(comp.ep_vertical_ratio),
-            "edge_selection_mode": str(comp.ep_edge_selection_mode),
-        }
-        diffraction = str(comp.ep_edge_diffraction)
-        if diffraction == "on":
-            kwargs["edge_diffraction"] = True
-        elif diffraction == "off":
-            kwargs["edge_diffraction"] = False
-        return ch.EdgePolicy(**kwargs)
-
-    @staticmethod
-    def deterministic(ch: Any, comp: Any) -> Any:
+    def deterministic(comp: Any) -> Any:
         """Build a ``deterministic.Config`` from the component."""
-        stratified = str(comp.det_quadrature_mode) == "stratified_fixed_n"
-        tuning = ch.deterministic.Tuning(
-            resolution_wavelength=num(comp.det_resolution_wavelength),
-            solver_mode=str(comp.det_solver_mode),
-            memory_profile=str(comp.det_memory_profile),
-            reflection_field_backend=ConfigBuilder._str_field(
-                comp, "det_reflection_field_backend", "native"),
-        )
-        return ch.deterministic.Config(
-            metric=str(comp.det_metric),
-            quadrature_mode=str(comp.det_quadrature_mode),
-            samples_per_cell=int(comp.det_samples_per_cell) if stratified else None,
-            shadow_boundary_correction=bool(comp.det_shadow_boundary_correction),
-            num_samples=int(comp.det_num_samples),
-            max_bounces=int(comp.det_max_bounces),
-            max_diffraction_order=int(comp.det_max_diffraction_order),
-            synthetic_array=bool(comp.det_synthetic_array),
-            edge_policy=ConfigBuilder.edge_policy(ch, comp),
-            tuning=tuning,
+        from witwin.channel import deterministic
+
+        bounces = int(comp.det_max_bounces)
+        order = min(int(comp.det_max_diffraction_order), _MAX_DIFFRACTION_ORDER)
+        return deterministic.Config(
+            max_depth=bounces,
+            max_diffraction_order=max(order, 1),
+            components=_components(bounces, order),
+            return_field=False,
         )
 
     @staticmethod
-    def montecarlo(ch: Any, comp: Any) -> Any:
-        """Build a ``montecarlo.Config`` from the component."""
-        integrator = str(comp.mc_integrator)
-        order = int(comp.mc_max_diffraction_order)
-        if integrator == "basic":
-            order = min(order, 1)  # basic supports diffraction depth {0, 1}
-        tuning = ch.montecarlo.Tuning(
-            resolution_wavelength=num(comp.mc_resolution_wavelength),
-            solver_mode=str(comp.mc_solver_mode),
-            memory_profile=str(comp.mc_memory_profile),
-            reflection_field_backend=ConfigBuilder._str_field(
-                comp, "mc_reflection_field_backend", "native"),
-        )
-        options = ch.montecarlo.IntegratorOptions(
-            integrator=integrator,
-            samples_per_tx=int(comp.mc_samples_per_tx),
-            seed=int(comp.mc_seed),
-            rr_depth=int(comp.mc_rr_depth) if bool(comp.mc_use_rr_depth) else None,
-            rr_prob=num(comp.mc_rr_prob) if bool(comp.mc_use_rr_prob) else None,
-            stop_threshold=num(comp.mc_stop_threshold) if bool(comp.mc_use_stop_threshold) else None,
-            bdpt_diffraction_sampling=str(comp.mc_bdpt_diffraction_sampling),
-            accumulation_backend=ConfigBuilder._str_field(
-                comp, "mc_accumulation_backend", ConfigBuilder._MC_ACCUMULATION_DEFAULT),
-        )
-        return ch.montecarlo.Config(
-            num_samples=int(comp.mc_num_samples),
-            max_bounces=int(comp.mc_max_bounces),
-            max_diffraction_order=order,
-            synthetic_array=bool(comp.mc_synthetic_array),
-            edge_policy=ConfigBuilder.edge_policy(ch, comp),
-            filtering=ConfigBuilder._filter(ch, comp),
-            tuning=tuning,
-            integrator_options=options,
-        )
+    def montecarlo(comp: Any) -> Any:
+        """Build a ``montecarlo.basic.Config`` / ``montecarlo.bdpt.Config``."""
+        from witwin.channel.montecarlo import basic, bdpt
 
-    @staticmethod
-    def _filter(ch: Any, comp: Any) -> Optional[Any]:
-        # One power-domain filter applied to both reflection + diffraction, when enabled.
-        if not bool(comp.mc_use_filtering):
-            return None
-        component = ch.montecarlo.ComponentFilterConfig(
-            method=str(comp.mc_filter_method),
-            radius=int(comp.mc_filter_radius),
-            sigma=num(comp.mc_filter_sigma),
-            blend=num(comp.mc_filter_blend),
-        )
-        return ch.montecarlo.FilterConfig(reflection=component, diffraction=component)
+        bounces = int(comp.mc_max_bounces)
+        order = min(int(comp.mc_max_diffraction_order), _MAX_DIFFRACTION_ORDER)
+        common = dict(samples=int(comp.mc_samples_per_tx), max_depth=bounces,
+                      seed=int(comp.mc_seed), components=_components(bounces, order))
+        if str(comp.mc_integrator) == "bdpt":
+            return bdpt.Config(max_diffraction_order=max(order, 1), **common)
+        return basic.Config(**common)
 
 
 class SolveRunner:
-    """Rebuild the platform scene from the studio scene and run a radiomap solve."""
+    """Rebuild the Core world from the studio scene and run a radiomap solve."""
 
     @staticmethod
-    def run(studio_scene: Any, comp: Any, *, transmitter: str, receiver: str) -> Any:
-        """Run the chosen solver family for the given Tx/grid; returns a ``RadioMapResult``."""
-        import witwin.channel as ch
-
-        platform = SolveRunner._build_scene(studio_scene, comp)
-        if str(comp.solver) == "montecarlo":
-            config = ConfigBuilder.montecarlo(ch, comp)
-            return ch.montecarlo.solve(scene=platform, transmitter=transmitter,
-                                       receiver=receiver, config=config)
-        config = ConfigBuilder.deterministic(ch, comp)
-        return ch.deterministic.solve(scene=platform, transmitter=transmitter,
-                                      receiver=receiver, config=config)
-
-    @staticmethod
-    def _build_scene(studio_scene: Any, comp: Any) -> Any:
-        # Rebuild the platform scene using the component's own scene config.
+    def run(studio_scene: Any, comp: Any, *, transmitter: str, receiver: str) -> RadioMapMaps:
+        """Run the chosen solver family for the given Tx/grid."""
         frequency = num(comp.frequency)
+        if frequency <= 0.0:
+            raise ValueError("radiomap frequency must be positive")
         noise = num(comp.noise_power) if bool(comp.use_noise_power) else None
-        return ChannelAdapter().build(
-            studio_scene, frequency=frequency if frequency > 0.0 else None,
-            device=str(comp.device), noise_power=noise)
+        world = ChannelAdapter().build(studio_scene, frequency=frequency, noise_power=noise,
+                                       transmitter=transmitter, receiver=receiver)
+        tx = ChannelAdapter.endpoint_by_name(world, transmitter)
+        if str(comp.solver) == "montecarlo":
+            from witwin.channel.montecarlo import basic, bdpt
+
+            config = ConfigBuilder.montecarlo(comp)
+            solver = bdpt if isinstance(config, bdpt.Config) else basic
+        else:
+            from witwin.channel import deterministic as solver
+
+            config = ConfigBuilder.deterministic(comp)
+        result = solver.solve(world, config, reference_frequency_hz=frequency)
+        gain = _to_numpy(result.path_gain)
+        if gain.ndim != 3:
+            raise ValueError(f"expected a (T, n_v, n_u) grid map, got shape {gain.shape}")
+        return RadioMapMaps(path_gain=gain, tx_power_w=np.array([num(tx.power_w)], np.float32),
+                            noise_power_w=noise)
 
 
 class RadioMapExtractor:
-    """Extract a 2D map (data + extent) from a ``RadioMapResult``."""
+    """Extract a 2D map (data + extent) from ``RadioMapMaps``."""
 
     @staticmethod
-    def extract(result: Any, *, metric: str, tx_index: int, bounds: List[float],
+    def extract(maps: RadioMapMaps, *, metric: str, tx_index: int, bounds: List[float],
                 log_scale: bool, vmin: Optional[float] = None,
                 vmax: Optional[float] = None) -> MapImage:
-        """Squeeze to one Tx, read ``metric`` as a (ny, nx) array, build the extent.
+        """Pick one Tx, read ``metric`` as a (n_v, n_u) array, build the extent.
 
         ``vmin`` / ``vmax`` (in the displayed units — dB when ``log_scale``) clamp the
         value window so the heatmap re-scales to exactly that range, without re-solving.
         """
-        single = result.squeeze_tx(int(tx_index))
-        data = RadioMapExtractor._to_numpy(getattr(single, metric))
+        data = maps.metric(metric)
+        data = data[max(0, min(int(tx_index), data.shape[0] - 1))]
         label = metric
         if log_scale:
             data = 10.0 * np.log10(np.abs(data) + 1e-30)
@@ -179,10 +156,8 @@ class RadioMapExtractor:
         extent = [float(bounds[0]), float(bounds[1]), float(bounds[2]), float(bounds[3])]
         return MapImage(np.asarray(data, dtype=np.float32), extent, label)
 
-    @staticmethod
-    def _to_numpy(tensor: Any) -> np.ndarray:
-        # RadioMapResult tensors are drjit FloatTensors; view as torch then numpy.
-        import torch
-        from witwin.channel.core.numerics.tensors import to_torch_view
 
-        return to_torch_view(tensor, dtype=torch.float32).detach().cpu().numpy()
+def _to_numpy(tensor: Any) -> np.ndarray:
+    if hasattr(tensor, "detach"):
+        tensor = tensor.detach().float().cpu().numpy()
+    return np.asarray(tensor, dtype=np.float32)

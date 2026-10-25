@@ -9,8 +9,8 @@ needed at test time. This conftest only adds the plugins directory so
 pip-installed; the server adds the same directory at startup). If the base/solver
 deps are not importable, the whole suite is skipped rather than erroring.
 
-Round-trip suites run on CPU with native-python tuples (``device='cpu'``). The live
-solve suites need CUDA RayD/OptiX and are gated per-solver by the ``det_ready`` /
+Adapter / config suites run on CPU. The live
+solve suites need CUDA RayD and are gated per-solver by the ``det_ready`` /
 ``mc_ready`` / ``path_ready`` fixtures (each probes its own solver and skips only if
 *that* one can't run here).
 """
@@ -73,18 +73,20 @@ def device():
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def _tiny_radiomap_scene():
-    # A small radiomap scene for probing whether a solver can run here.
-    import witwin.channel as ch
-    from witwin.core import Box, Material, Structure
-    return ch.Scene(
-        structures=[Structure(Box(size=(8.0, 8.0, 0.1), position=(0.0, 0.0, 0.0)),
-                              Material.from_itu("concrete"), name="ground")],
-        transmitters=[ch.Transmitter(name="tx", position=(0.0, 0.0, 3.0))],
-        receivers=[ch.ReceiverGrid(name="rmap", axis="z", position=1.5,
-                                   bounds=((-4.0, 4.0), (-4.0, 4.0)), grid_shape=(8, 8))],
-        frequency=3.5e9, device="cuda",
-    )
+def _tiny_radiomap_world():
+    # A small Core 0.4 radiomap world for probing whether a solver can run here. It is
+    # built directly (not through the adapter) so an adapter bug still fails its test.
+    import torch
+    from witwin.core import AntennaState, Mesh, PhysicalMaterial, ReceiverGrid, Scene, Structure
+    ground = Structure(
+        Mesh(torch.tensor([[-4.0, -4.0, 0.0], [4.0, -4.0, 0.0], [4.0, 4.0, 0.0], [-4.0, 4.0, 0.0]]),
+             torch.tensor([[0, 1, 2], [0, 2, 3]]), recenter=False, fill_mode="surface"),
+        PhysicalMaterial(eps_r=5.24, sigma_e=0.12, name="concrete"), name="ground")
+    return Scene(structures=[ground], endpoints=[
+        AntennaState(1, "tx", torch.tensor([0.0, 0.0, 3.0]), power_w=1.0),
+        ReceiverGrid(2, torch.tensor([-3.5, -3.5, 1.5]), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0),
+                     (8, 8), (1.0, 1.0)),
+    ])
 
 
 @pytest.fixture(scope="session")
@@ -98,9 +100,10 @@ def cuda(device):
 @pytest.fixture(scope="session")
 def det_ready(cuda):
     """Gate the deterministic live solve on its OptiX pipeline compiling here."""
-    import witwin.channel as ch
+    from witwin.channel import deterministic
     try:
-        ch.deterministic.solve(scene=_tiny_radiomap_scene(), transmitter="tx", receiver="rmap")
+        deterministic.solve(_tiny_radiomap_world(), deterministic.Config(max_depth=1),
+                            reference_frequency_hz=3.5e9)
     except Exception as exc:  # noqa: BLE001 - test gate: needs-user-verification if it can't run
         pytest.skip(f"deterministic solver unavailable in this environment: {exc}")
     return True
@@ -109,9 +112,10 @@ def det_ready(cuda):
 @pytest.fixture(scope="session")
 def mc_ready(cuda):
     """Gate the Monte Carlo live solve on its solver running here."""
-    import witwin.channel as ch
+    from witwin.channel.montecarlo import basic
     try:
-        ch.montecarlo.solve(scene=_tiny_radiomap_scene(), transmitter="tx", receiver="rmap")
+        basic.solve(_tiny_radiomap_world(), basic.Config(samples=1024, max_depth=1),
+                    reference_frequency_hz=3.5e9)
     except Exception as exc:  # noqa: BLE001 - test gate: needs-user-verification if it can't run
         pytest.skip(f"montecarlo solver unavailable in this environment: {exc}")
     return True

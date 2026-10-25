@@ -1,68 +1,58 @@
-"""C1 — materials round-trip (explicit scalar + ITU presets).
+"""C1 — ITU material presets on the Core 0.4 world (CPU).
 
-Explicit scalar materials round-trip as ``core.Material`` (no preset companion). ITU
-materials round-trip through their *identity* ``itu_descriptor`` ``(name, override)``
-— reconstructed via ``Material.from_itu``, never via the evaluated eps_r/sigma_e — and
-the preset's frequency band is validated on export.
+witwin-channel 0.4+ no longer ships ``Material.from_itu``; the plugin owns the ITU-R
+P.2040 table and evaluates it into a scalar ``witwin.core.PhysicalMaterial`` at the
+solve frequency: ``eps_r = a*f_GHz^b``, ``sigma_e = c*f_GHz^d``. Each preset is defined
+only over its band, so out-of-band exports raise.
 """
 import pytest
-from witwin.core import Box, Material, Structure
-
-from _helpers import RT
 
 
-def _scene(structure, *, frequency=3.5e9):
-    import witwin.channel as ch
-    return ch.Scene(structures=[structure], frequency=frequency, device="cpu")
+def test_concrete_evaluates_at_frequency():
+    from witwin.core import PhysicalMaterial
+    from wt_channel.adapter.itu import itu_material
+
+    material = itu_material("concrete", 3.5e9)
+
+    assert isinstance(material, PhysicalMaterial)
+    assert material.name == "concrete"
+    assert float(material.eps_r) == pytest.approx(5.24)
+    assert float(material.sigma_e) == pytest.approx(0.0462 * 3.5 ** 0.7822)
+    assert float(material.mu_r) == pytest.approx(1.0)
 
 
-def test_explicit_scalar_has_no_preset(adapter):
-    scene = _scene(Structure(Box(size=(2, 2, 0.2)), Material(eps_r=4.5, sigma_e=0.02, name="wall"),
-                             name="wall"))
-    studio = adapter.to_studio(scene)
-    obj = next(o for o in studio.objects.values() if o.name == "wall")
-    assert obj.get_component("MaterialPreset") is None
-    rebuilt = adapter.to_platform(studio).structures[0]
-    assert getattr(rebuilt.material, "itu_descriptor", None) is None
-    RT.assert_material(rebuilt.material, scene.structures[0].material)
+def test_glass_uses_its_high_band():
+    from wt_channel.adapter.itu import itu_material
+
+    material = itu_material("glass", 300e9)
+
+    assert float(material.eps_r) == pytest.approx(5.79)
+    assert float(material.sigma_e) == pytest.approx(0.0004 * 300.0 ** 1.658)
 
 
-def test_itu_preset_roundtrip_identity(adapter):
-    scene = _scene(Structure(Box(size=(8, 8, 0.2)), Material.from_itu("concrete"), name="ground"))
-    studio = adapter.to_studio(scene)
-    obj = next(o for o in studio.objects.values() if o.name == "ground")
-    preset = obj.get_component("MaterialPreset")
-    assert preset is not None
-    assert str(preset.preset) == "concrete"
-    assert bool(preset.use_frequency_override) is False
-    # Reconstructs via the descriptor identity, NOT the evaluated numbers.
-    rebuilt = adapter.to_platform(studio).structures[0]
-    assert rebuilt.material.itu_descriptor == ("concrete", None)
+def test_itu_alias_normalizes():
+    from wt_channel.adapter.itu import normalize_itu_name
+
+    assert normalize_itu_name("itu_brick") == "brick"
+    assert normalize_itu_name("Ceiling Board") == "ceiling_board"
 
 
-def test_itu_preset_frequency_override_roundtrip(adapter):
-    # Scene at 3.5 GHz, but this material is pinned to 60 GHz (glass's high band).
-    scene = _scene(Structure(Box(size=(2, 2, 0.1)), Material.from_itu("glass", 60e9), name="pane"))
-    studio = adapter.to_studio(scene)
-    preset = next(o for o in studio.objects.values() if o.name == "pane").get_component("MaterialPreset")
-    assert bool(preset.use_frequency_override) is True
-    assert float(preset.frequency_override) == pytest.approx(60e9)
-    rebuilt = adapter.to_platform(studio).structures[0]
-    assert rebuilt.material.itu_descriptor[0] == "glass"
-    assert rebuilt.material.itu_descriptor[1] == pytest.approx(60e9)
+def test_out_of_band_raises_with_name():
+    from wt_channel.adapter.itu import itu_material
 
-
-def test_itu_alias_normalizes(adapter):
-    scene = _scene(Structure(Box(size=(2, 2, 0.1)), Material.from_itu("itu_brick"), name="b"))
-    rebuilt = RT.back(adapter, scene).structures[0]
-    assert rebuilt.material.itu_descriptor == ("brick", None)
-
-
-def test_itu_band_validation_on_export(adapter):
-    # very_dry_ground is only defined over 1-10 GHz; exporting at 50 GHz must raise.
-    scene = _scene(Structure(Box(size=(8, 8, 0.2)), Material.from_itu("very_dry_ground"), name="g"))
-    studio = adapter.to_studio(scene)
-    # A structures-only scene carries its config on the auto-added Path Solver object.
-    studio.get_object_by_name("Path Solver").get_component("PathSolver").frequency = 50e9
     with pytest.raises(ValueError, match="very_dry_ground"):
-        adapter.to_platform(studio)
+        itu_material("very_dry_ground", 50e9)
+
+
+def test_unknown_preset_raises():
+    from wt_channel.adapter.itu import itu_material
+
+    with pytest.raises(ValueError, match="unknown ITU material"):
+        itu_material("cheese", 3.5e9)
+
+
+def test_component_preset_names_match_table():
+    from wt_channel.adapter.itu import ITU_MATERIALS
+    from wt_channel.components.materials import PRESET_NAMES
+
+    assert set(PRESET_NAMES) == set(ITU_MATERIALS)

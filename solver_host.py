@@ -25,7 +25,7 @@ from wt_channel.adapter.path_solve import (
     _COLORMAP_VIRIDIS,
     _gain_to_rgba,
 )
-from wt_channel.adapter.solve import RadioMapExtractor, SolveRunner
+from wt_channel.adapter.solve import SolveRunner
 
 
 @dataclass
@@ -76,14 +76,8 @@ def solve(ctx, scene, config):
     return cache
 
 
-def _radiomap_cache(result) -> RadioMapCache:
-    metrics = {}
-    for name in ("path_gain", "rss", "sinr"):
-        if hasattr(result, name):
-            metrics[name] = np.asarray(
-                RadioMapExtractor._to_numpy(getattr(result, name)),
-                dtype=np.float32,
-            )
+def _radiomap_cache(maps) -> RadioMapCache:
+    metrics = {name: np.asarray(data, dtype=np.float32) for name, data in maps.metrics().items()}
     return RadioMapCache(metrics=metrics)
 
 

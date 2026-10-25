@@ -1,10 +1,10 @@
 """C3 — solver config + library prefabs (CPU) and the live radiomap solve (CUDA).
 
-The config builders (deterministic + Monte Carlo + edge policy) are pure CPU: they map
-the ChannelResult component's curated fields onto valid platform Config objects. The
-library prefabs build correct studio objects that round-trip. The live solve
-(``test_live_*``) needs CUDA RayD/OptiX and is skipped otherwise — it must not be
-faked as passing.
+The config builders map the RadioMap component's curated fields onto the witwin-channel
+0.5 solver configs (``deterministic.Config``, ``montecarlo.basic.Config``,
+``montecarlo.bdpt.Config``). The library prefabs build correct studio objects. The live
+solve (``test_live_*``) needs CUDA RayD and is skipped otherwise — it must not be faked
+as passing.
 """
 import asyncio
 import json
@@ -16,9 +16,6 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from witwin.core import Box, Material, Structure
-
-from _helpers import RT
 
 
 # --- config builders (CPU) -----------------------------------------------------
@@ -29,168 +26,125 @@ def _result_component():
 
 
 def test_deterministic_config_maps_fields():
-    import witwin.channel as ch
+    from witwin.channel import deterministic
     from wt_channel.adapter.solve import ConfigBuilder
 
     comp = _result_component()
     comp.solver = "deterministic"
-    comp.det_metric = "sinr"
-    comp.det_num_samples = 5000
     comp.det_max_bounces = 3
     comp.det_max_diffraction_order = 2
-    comp.det_reflection_field_backend = "drjit"
-    comp.det_resolution_wavelength = 0.25
-    config = ConfigBuilder.deterministic(ch, comp)
-    assert isinstance(config, ch.deterministic.Config)
-    assert config.metric == "sinr"
-    assert config.num_samples == 5000
-    assert config.max_bounces == 3
-    assert config.max_diffraction_order == 2
-    assert config.tuning.reflection_field_backend == "drjit"
-    assert float(config.tuning.resolution_wavelength) == pytest.approx(0.25)
+
+    config = ConfigBuilder.deterministic(comp)
+
+    assert isinstance(config, deterministic.Config)
+    assert config.max_depth == 3
+    assert config.max_diffraction_order == 1  # public capability is first order
+    assert config.components == frozenset({"los", "reflection", "diffraction"})
+    assert config.return_field is False  # the radiomap only reads path gain
 
 
-def test_deterministic_stratified_quadrature():
-    import witwin.channel as ch
+def test_montecarlo_basic_config_maps_fields():
+    from witwin.channel.montecarlo import basic
     from wt_channel.adapter.solve import ConfigBuilder
 
     comp = _result_component()
-    comp.det_quadrature_mode = "stratified_fixed_n"
-    comp.det_samples_per_cell = 8
-    config = ConfigBuilder.deterministic(ch, comp)
-    assert config.quadrature_mode == "stratified_fixed_n"
-    assert config.samples_per_cell == 8
-
-
-def test_montecarlo_config_maps_fields_and_integrator():
-    import witwin.channel as ch
-    from wt_channel.adapter.solve import ConfigBuilder
-
-    comp = _result_component()
-    comp.solver = "montecarlo"
-    comp.mc_num_samples = 2048
-    comp.mc_integrator = "bdpt"
-    comp.mc_max_diffraction_order = 3
-    comp.mc_samples_per_tx = 4096
-    comp.mc_seed = 7
-    comp.mc_use_rr_depth = True
-    comp.mc_rr_depth = 3
-    comp.mc_bdpt_diffraction_sampling = "hash"
-    comp.mc_accumulation_backend = "native_monte_carlo"
-    config = ConfigBuilder.montecarlo(ch, comp)
-    assert isinstance(config, ch.montecarlo.Config)
-    assert config.num_samples == 2048
-    assert config.max_diffraction_order == 3
-    assert config.integrator_options.integrator == "bdpt"
-    assert config.integrator_options.samples_per_tx == 4096
-    assert config.integrator_options.seed == 7
-    assert config.integrator_options.rr_depth == 3
-    assert config.integrator_options.bdpt_diffraction_sampling == "hash"
-    assert config.integrator_options.accumulation_backend == "native_monte_carlo"
-
-
-def test_montecarlo_legacy_config_uses_platform_accumulation_default():
-    import witwin.channel as ch
-    from wt_channel.adapter.solve import ConfigBuilder
-
-    comp = _result_component()
-    legacy = SimpleNamespace(**{
-        name: getattr(comp, name)
-        for name in (
-            "mc_resolution_wavelength", "mc_solver_mode", "mc_memory_profile",
-            "mc_reflection_field_backend", "mc_integrator", "mc_max_diffraction_order",
-            "mc_samples_per_tx", "mc_seed", "mc_use_rr_depth", "mc_rr_depth",
-            "mc_use_rr_prob", "mc_rr_prob", "mc_use_stop_threshold", "mc_stop_threshold",
-            "mc_bdpt_diffraction_sampling", "mc_num_samples", "mc_max_bounces",
-            "mc_synthetic_array", "mc_use_filtering", "ep_vertical_ratio",
-            "ep_edge_selection_mode", "ep_edge_diffraction",
-        )
-    })
-
-    config = ConfigBuilder.montecarlo(ch, legacy)
-
-    assert config.integrator_options.accumulation_backend == "auto"
-
-
-def test_montecarlo_basic_clamps_diffraction_order():
-    import witwin.channel as ch
-    from wt_channel.adapter.solve import ConfigBuilder
-
-    comp = _result_component()
-    comp.solver = "montecarlo"
     comp.mc_integrator = "basic"
-    comp.mc_max_diffraction_order = 3  # basic supports 0/1 -> must clamp
-    config = ConfigBuilder.montecarlo(ch, comp)
+    comp.mc_samples_per_tx = 4096
+    comp.mc_max_bounces = 2
+    comp.mc_seed = 7
+
+    config = ConfigBuilder.montecarlo(comp)
+
+    assert isinstance(config, basic.Config)
+    assert config.samples == 4096
+    assert config.max_depth == 2
+    assert config.seed == 7
+    assert config.components == frozenset({"los", "reflection", "diffraction"})
+
+
+def test_montecarlo_bdpt_config_maps_fields():
+    from witwin.channel.montecarlo import bdpt
+    from wt_channel.adapter.solve import ConfigBuilder
+
+    comp = _result_component()
+    comp.mc_integrator = "bdpt"
+    comp.mc_samples_per_tx = 2048
+    comp.mc_max_bounces = 3
+    comp.mc_max_diffraction_order = 3
+
+    config = ConfigBuilder.montecarlo(comp)
+
+    assert isinstance(config, bdpt.Config)
+    assert config.samples == 2048
+    assert config.max_depth == 3
     assert config.max_diffraction_order == 1
 
 
-def test_montecarlo_filtering_config():
-    import witwin.channel as ch
+def test_components_drop_reflection_and_diffraction_when_disabled():
     from wt_channel.adapter.solve import ConfigBuilder
 
     comp = _result_component()
-    comp.solver = "montecarlo"
-    comp.mc_use_filtering = True
-    comp.mc_filter_method = "bilateral"
-    comp.mc_filter_radius = 2
-    comp.mc_filter_sigma = 1.5
-    config = ConfigBuilder.montecarlo(ch, comp)
-    assert config.filtering is not None
-    assert config.filtering.reflection.method == "bilateral"
-    assert config.filtering.reflection.radius == 2
-    assert config.filtering.diffraction.method == "bilateral"
+    comp.mc_max_bounces = 0
+    comp.mc_max_diffraction_order = 0
+
+    config = ConfigBuilder.montecarlo(comp)
+
+    assert config.components == frozenset({"los"})
+    assert config.max_depth == 0
 
 
-def test_edge_policy_default_and_overrides():
-    import witwin.channel as ch
-    from wt_channel.adapter.solve import ConfigBuilder
+# --- result maps (CPU) -----------------------------------------------------------
 
-    default_comp = _result_component()
-    assert default_comp.ep_edge_diffraction == "on"
-    default_policy = ConfigBuilder.edge_policy(ch, default_comp)
-    assert default_policy.edge_diffraction is True
+def test_radiomap_maps_derive_rss_and_sinr():
+    from wt_channel.adapter.solve import RadioMapMaps
 
-    comp = _result_component()
-    comp.ep_vertical_ratio = 0.6
-    comp.ep_edge_selection_mode = "vertical_only"
-    comp.ep_edge_diffraction = "off"
-    policy = ConfigBuilder.edge_policy(ch, comp)
-    assert float(policy.vertical_ratio) == pytest.approx(0.6)
-    assert policy.edge_selection_mode == "vertical_only"
-    assert policy.edge_diffraction is False
-    assert policy.boundary_edge_policy == "exclude"
+    gain = np.array([[[1e-6, 1e-8], [1e-10, 0.0]]], dtype=np.float32)  # (T=1, n_v=2, n_u=2)
+    maps = RadioMapMaps(path_gain=gain, tx_power_w=np.array([2.0]), noise_power_w=1e-12)
+
+    np.testing.assert_allclose(maps.metric("path_gain"), gain)
+    np.testing.assert_allclose(maps.metric("rss"), gain * 2.0)
+    np.testing.assert_allclose(maps.metric("sinr"), gain * 2.0 / 1e-12, rtol=1e-6)
+    assert set(maps.metrics()) == {"path_gain", "rss", "sinr"}
 
 
-# --- library prefabs (CPU) -----------------------------------------------------
+def test_radiomap_maps_without_noise_have_no_sinr():
+    from wt_channel.adapter.solve import RadioMapMaps
 
-class _FakeResult:
-    """Minimal RadioMapResult stand-in for testing the value-range windowing on CPU."""
+    maps = RadioMapMaps(path_gain=np.ones((1, 2, 2), np.float32), tx_power_w=np.array([1.0]))
 
-    def __init__(self, arr):
-        import torch
-        self._arr = torch.as_tensor(arr, dtype=torch.float32)
-
-    def squeeze_tx(self, index):
-        return self
-
-    @property
-    def path_gain(self):
-        return self._arr
+    assert set(maps.metrics()) == {"path_gain", "rss"}
+    with pytest.raises(ValueError, match="sinr"):
+        maps.metric("sinr")
 
 
 def test_value_range_clamps_without_resolve():
-    from wt_channel.adapter.solve import RadioMapExtractor
+    from wt_channel.adapter.solve import RadioMapExtractor, RadioMapMaps
 
-    result = _FakeResult([[1.0, 10.0], [100.0, 1000.0]])  # linear; 0/10/20/30 dB
-    full = RadioMapExtractor.extract(result, metric="path_gain", tx_index=0,
+    maps = RadioMapMaps(path_gain=np.array([[[1.0, 10.0], [100.0, 1000.0]]], np.float32),
+                        tx_power_w=np.array([1.0]))
+    full = RadioMapExtractor.extract(maps, metric="path_gain", tx_index=0,
                                      bounds=[-1, 1, -1, 1], log_scale=True)
     np.testing.assert_allclose(sorted(full.data.flatten()), [0.0, 10.0, 20.0, 30.0], atol=1e-3)
-    # Windowing to [5, 25] dB clamps the extremes (re-window, same stored result).
-    windowed = RadioMapExtractor.extract(result, metric="path_gain", tx_index=0,
+    windowed = RadioMapExtractor.extract(maps, metric="path_gain", tx_index=0,
                                          bounds=[-1, 1, -1, 1], log_scale=True, vmin=5.0, vmax=25.0)
     assert float(windowed.data.min()) == pytest.approx(5.0)
     assert float(windowed.data.max()) == pytest.approx(25.0)
 
+
+def test_solver_host_cache_keeps_every_metric():
+    import wt_channel.solver_host as host
+    from wt_channel.adapter.solve import RadioMapMaps
+
+    maps = RadioMapMaps(path_gain=np.ones((1, 2, 3), np.float32), tx_power_w=np.array([4.0]))
+
+    cache = host._radiomap_cache(maps)
+
+    assert set(cache.metrics) == {"path_gain", "rss"}
+    assert cache.metrics["rss"].shape == (1, 2, 3)
+    np.testing.assert_allclose(cache.metrics["rss"], 4.0)
+
+
+# --- library prefabs (CPU) -----------------------------------------------------
 
 def test_library_items_registered(wtc):
     from witwin_server.features.library.service import _pending_items
@@ -239,7 +193,7 @@ def test_demo_prefab_does_not_import_channel_platform(monkeypatch, wtc):
     assert {item.name for item in studio.objects.values()} == {"Channel Ground", "Tx", "Rx", "Path Solver"}
 
 
-def test_demo_prefab_roundtrips(adapter, wtc):
+def test_demo_prefab_builds_core_world(adapter, wtc):
     from witwin_server import Scene as StudioScene
     from wt_channel import library_items
 
@@ -248,18 +202,26 @@ def test_demo_prefab_roundtrips(adapter, wtc):
     ctx = SimpleNamespace(scene=studio, name="RadioMap")
     studio.add_object(library_items._make_demo(ctx))  # returns the RadioMap (primary)
     studio.end_batch()
-    # The RadioMap is the scene-config carrier; force CPU so the round trip needs no GPU.
-    studio.get_object_by_name("RadioMap").get_component("RadioMap").device = "cpu"
 
-    platform = adapter.to_platform(studio)
-    assert {s.name for s in platform.structures} == {"Channel Ground"}
-    assert {t.name for t in platform.transmitters} == {"Tx"}
-    assert {r.name for r in platform.receivers} == {"RadioMap", "Rx"}  # grid + point Rx
-    assert platform.structures[0].material.itu_descriptor == ("concrete", None)
+    world = adapter.to_platform(studio)
+
+    assert {s.name for s in world.structures} == {"Channel Ground"}
+    assert sorted(e.metadata["name"] for e in world.endpoints) == ["RadioMap", "Rx", "Tx"]
+    assert world.structures[0].material.name == "concrete"
+
+
+def test_demo_scene_factory_builds_core_world(wtc):
+    from witwin.core import Scene
+    from wt_channel.examples.demo_scene import build_scene
+
+    world = build_scene()
+
+    assert isinstance(world, Scene)
+    assert len(world.structures) >= 1
+    assert {e.role for e in world.endpoints} == {"tx", "rx"}
 
 
 def test_default_solver_is_montecarlo():
-    # Deterministic needs its OptiX pipeline to compile; MC is the robust default.
     from wt_channel.components.radiomap import RadioMapComponent
 
     assert str(RadioMapComponent().solver) == "montecarlo"
@@ -275,8 +237,8 @@ def test_radiomap_is_field_locked_to_xz():
 
 
 def test_radiomap_plane_volume_orientation():
-    # The platform tensor is (n_v=bounds1, n_u=bounds0); the field volume must be world
-    # axis-aligned so data[iv, iu] lands at world (t0=iu, t1=iv) on the XZ plane.
+    # The solved map is (n_v=Z, n_u=X); the field volume must be world axis-aligned so
+    # data[iv, iu] lands at world (t0=iu, t1=iv) on the XZ plane.
     from wt_channel.components.radiomap import RadioMapComponent
 
     comp = RadioMapComponent()  # plane XZ -> t0=X(0), t1=Z(2), normal=Y(1)
@@ -397,51 +359,62 @@ def test_radiomap_component_uses_solver_api_for_solve(monkeypatch):
 
 # --- live solve (CUDA) ---------------------------------------------------------
 
-def _live_scene():
-    import witwin.channel as ch
-    return ch.Scene(
-        structures=[Structure(Box(size=(20.0, 20.0, 0.2), position=(0.0, 0.0, 0.0)),
-                              Material.from_itu("concrete"), name="ground")],
-        transmitters=[ch.Transmitter(name="tx", position=(0.0, 0.0, 4.0))],
-        receivers=[ch.ReceiverGrid(name="rmap", axis="z", position=1.5,
-                                   bounds=((-8.0, 8.0), (-8.0, 8.0)), grid_shape=(16, 16))],
-        frequency=3.5e9, device="cuda",
-    )
+def _live_studio():
+    """20 m concrete ground (Y up), Tx near the +X/-Z corner, 16x16 map at 1.5 m."""
+    from witwin_server import Scene as StudioScene, SceneObject
+    from wt_channel.components.endpoints import TxComponent
+    from wt_channel.components.radiomap import RadioMapComponent
+
+    studio = StudioScene()
+    ground = SceneObject(name="ground", mesh_type="Custom")
+    verts = np.array([[-10, 0, -10], [10, 0, -10], [10, 0, 10], [-10, 0, 10]], np.float32)
+    faces = np.array([[0, 2, 1], [0, 3, 2]], np.uint32)
+    ground.get_component("Mesh").set_mesh_data(verts, faces, notify=False)
+    studio.add_object(ground)
+
+    tx = SceneObject(name="tx", mesh_type="Empty")
+    tx_comp = tx.add_component(TxComponent())
+    tx_comp.polarization = [0.0, 1.0, 0.0]
+    tx.get_component("Transform").position = [7.0, 4.0, -7.0]
+    studio.add_object(tx)
+
+    rmap = SceneObject(name="rmap", mesh_type="Empty")
+    comp = rmap.add_component(RadioMapComponent())
+    comp.min_bound = [-8.0, 0.0, -8.0]
+    comp.max_bound = [8.0, 0.0, 8.0]
+    comp.resolution = [16.0, 1.0, 16.0]
+    rmap.get_component("Transform").position = [0.0, 1.5, 0.0]
+    studio.add_object(rmap)
+    return studio, comp
 
 
-def _run_live(adapter, solver):
-    # Round-trip then solve via the adapter; return the (ny,nx) path-gain map.
-    from wt_channel.adapter.solve import RadioMapExtractor, SolveRunner
+def _run_live(solver):
+    from wt_channel.adapter.solve import SolveRunner
 
-    studio = adapter.to_studio(_live_scene())
-    comp = studio.get_object_by_name("rmap").get_component("RadioMap")  # the grid is a RadioMap
+    studio, comp = _live_studio()
     comp.solver = solver
-    comp.det_num_samples = comp.mc_num_samples = 2000
-    result = SolveRunner.run(studio, comp, transmitter="tx", receiver="rmap")
-    return result, RadioMapExtractor._to_numpy(result.squeeze_tx(0).path_gain)
+    comp.mc_samples_per_tx = 1 << 16
+    return SolveRunner.run(studio, comp, transmitter="tx", receiver="rmap")
 
 
-def test_live_deterministic_matches_direct(adapter, det_ready):
-    """Round-trip then deterministic solve; assert the map matches a direct run's shape."""
-    import witwin.channel as ch
-
-    result, got = _run_live(adapter, "deterministic")
-    ref = ch.deterministic.solve(scene=_live_scene(), transmitter="tx", receiver="rmap")
-    assert tuple(result.grid_shape) == tuple(ref.grid_shape) == (16, 16)
-    assert got.shape == (16, 16) and np.isfinite(got).any()
-
-
-def test_live_montecarlo_matches_direct(adapter, mc_ready):
-    """Round-trip then Monte Carlo solve; assert the map matches a direct run's shape."""
-    import witwin.channel as ch
-
-    result, got = _run_live(adapter, "montecarlo")
-    ref = ch.montecarlo.solve(scene=_live_scene(), transmitter="tx", receiver="rmap")
-    assert tuple(result.grid_shape) == tuple(ref.grid_shape) == (16, 16)
-    assert got.shape == (16, 16) and np.isfinite(got).any()
+def _assert_map_oriented(maps):
+    gain = maps.metric("path_gain")
+    assert gain.shape == (1, 16, 16)  # (T, n_v=Z, n_u=X)
+    assert np.isfinite(gain).all() and (gain > 0).any()
+    iv, iu = np.unravel_index(int(np.argmax(gain[0])), gain[0].shape)
+    # Tx sits above world (x=+7, z=-7): high u (+X) and low v (-Z) on the grid.
+    assert iu >= 12 and iv <= 3, (iu, iv)
 
 
-def test_live_radiomap_solver_host_solves_and_queries(adapter, mc_ready):
+def test_live_montecarlo_radiomap_is_oriented(mc_ready):
+    _assert_map_oriented(_run_live("montecarlo"))
+
+
+def test_live_deterministic_radiomap_is_oriented(det_ready):
+    _assert_map_oriented(_run_live("deterministic"))
+
+
+def test_live_radiomap_solver_host_solves_and_queries(mc_ready):
     """Exercise the real RFC-012 child process path for radiomap solve + query."""
     from pathlib import Path
     from witwin_server.features.runs.store import RunStore
@@ -462,10 +435,8 @@ def test_live_radiomap_solver_host_solves_and_queries(adapter, mc_ready):
     work_dir.mkdir(parents=True, exist_ok=True)
     host = SolverHost(spec, RunStore(work_dir / "runs.db"))
     try:
-        studio = adapter.to_studio(_live_scene())
-        comp = studio.get_object_by_name("rmap").get_component("RadioMap")
+        studio, comp = _live_studio()
         comp.solver = "montecarlo"
-        comp.mc_num_samples = 128
         comp.mc_samples_per_tx = 2048
         comp.mc_max_bounces = 1
         comp.mc_max_diffraction_order = 0

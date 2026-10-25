@@ -43,10 +43,16 @@ wt_channel/
 ## Conventions
 
 Units everywhere: meters, radians, Hz, S/m. Rotation quaternions are `[w, x, y, z]`.
-The platform packages (`witwin.channel` / `witwin.core`) are **not** manifest
-`dependencies` — they are local `PYTHONPATH` packages; the adapter lazy-imports them
-and degrades if absent. Round-trip is CPU-only (`device='cpu'`, native-python tuples);
-live solves need CUDA RayD/OptiX.
+Targets **witwin-channel 0.5 / witwin-core 0.4**: the platform scene is the logical
+`witwin.core.Scene` (structures + `AntennaState` / `ReceiverGrid` endpoints, Studio
+object names in `metadata["name"]`, channel config in `metadata["channel"]`), and every
+solver is `solve(scene, config, *, reference_frequency_hz)`. Channel 0.5 has no ITU
+material helper, so `adapter/itu.py` owns the ITU-R P.2040 table. Plain Studio meshes
+(e.g. an imported street map) solve as ITU concrete unless they carry a
+`MaterialPreset`, an ITU pick, or hand-edited EM scalars. Only the single isotropic
+antenna element is ported; arrays and other patterns raise. The platform packages
+(`witwin.channel` / `witwin.core`) are **not** manifest `dependencies`; the adapter
+lazy-imports them. Adapter and config tests run on CPU; live solves need CUDA RayD.
 
 ## Tests
 

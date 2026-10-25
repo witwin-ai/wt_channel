@@ -1,12 +1,20 @@
-"""Endpoint interchange: channel endpoints <-> studio Empty objects.
+"""Endpoint interchange: Core 0.4 endpoints <-> studio Empty objects.
 
-Each platform endpoint becomes an ``Empty`` ``SceneObject`` carrying the matching
-component, its world position on the object's ``Transform``, and its antenna inline on
-the component. A platform ``Transmitter`` <-> a ``ChannelTx`` object; a point
-``Receiver`` <-> a ``ChannelRx`` object; a ``ReceiverGrid`` <-> a ``RadioMap`` object
-(the radiomap *is* the grid, named after itself). ``orientation`` is the antenna euler
-(kept off the display Transform). Scene-default ``tx_array`` / ``rx_array`` are baked
-into each endpoint that lacks an explicit array on import.
+Each endpoint is an ``Empty`` ``SceneObject`` carrying the matching component, its world
+position on the object's ``Transform``, and its antenna inline on the component. A tx
+``witwin.core.AntennaState`` <-> a ``ChannelTx`` object; a point rx ``AntennaState`` <-> a
+``ChannelRx`` object; a ``witwin.core.ReceiverGrid`` <-> a ``RadioMap`` object (the
+radiomap *is* the grid). Core endpoints carry no name, so the Studio object name rides
+``metadata["name"]``. ``orientation`` is the antenna euler (kept off the display
+Transform).
+
+The grid samples are the RadioMap Field-region cell centers. Its axes are the plane's
+tangential world axes (u -> ``x_axis``, v -> ``y_axis``) and ``shape`` is
+``(n_u, n_v)``; the solvers publish a grid map as ``(T, n_v, n_u)``, which is exactly the
+``data[iv, iu]`` layout the RadioMap plane visualizer consumes.
+
+Only the plain single isotropic element is ported to witwin-channel 0.5; arrays and
+non-isotropic patterns fail loudly instead of silently solving a different antenna.
 """
 import math
 from typing import Any, Optional, Tuple
@@ -21,132 +29,157 @@ TX_COMPONENT = "ChannelTx"
 RX_COMPONENT = "ChannelRx"
 RADIOMAP_COMPONENT = "RadioMap"
 
-# The RadioMap reuses the inherited Field region: plane <-> grid axis + tangential axes.
-# plane -> (grid axis, normal index, tangential0 index, tangential1 index).
-_PLANE_INFO = {"XY": ("z", 2, 0, 1), "XZ": ("y", 1, 0, 2), "YZ": ("x", 0, 1, 2)}
-_AXIS_TO_PLANE = {"z": "XY", "y": "XZ", "x": "YZ"}
+# The RadioMap reuses the inherited Field region: plane -> (normal, tangential0, tangential1).
+_PLANE_INFO = {"XY": (2, 0, 1), "XZ": (1, 0, 2), "YZ": (0, 1, 2)}
 _SPEED_OF_LIGHT = 299792458.0
 
 
+def endpoint_name(endpoint: Any) -> str:
+    """The Studio object name an endpoint was built from ('' when unnamed)."""
+    return str((endpoint.metadata or {}).get("name", ""))
+
+
 class EndpointMap:
-    """Channel endpoints <-> studio Empty objects (antenna inline on the component)."""
+    """Core endpoints <-> studio Empty objects (antenna inline on the component)."""
 
     # --- platform -> studio --------------------------------------------------
 
     @staticmethod
-    def tx_to_studio(tx: Any, scene_default_array: Optional[Any] = None) -> SceneObject:
-        """Build a Tx Empty object from a platform ``Transmitter``."""
+    def tx_to_studio(tx: Any) -> SceneObject:
+        """Build a Tx Empty object from a tx ``AntennaState``."""
         from ..components.endpoints import TxComponent
 
-        obj = SceneObject(name=tx.name, mesh_type="Empty")
+        obj = SceneObject(name=endpoint_name(tx) or "Tx", mesh_type="Empty")
         comp = obj.add_component(TxComponent())
         if tx.polarization is not None:
-            comp.polarization = list(tx.polarization)
-        comp.power = float(tx.power)
+            comp.polarization = _floats(tx.polarization)
+        if tx.power_w is not None:
+            comp.power = num(tx.power_w)
         EndpointMap._write_orientation(comp, tx.orientation)
-        EndpointMap._set_position(obj, tx.position)
-        ArraySpecMap.to_studio(comp, tx.array if tx.array is not None else scene_default_array)
+        EndpointMap._set_position(obj, _floats(tx.position))
+        ArraySpecMap.to_studio(comp, None)
         return obj
 
     @staticmethod
-    def rx_to_studio(rx: Any, scene_default_array: Optional[Any] = None) -> SceneObject:
-        """Build an Rx Empty object from a platform ``Receiver``."""
+    def rx_to_studio(rx: Any) -> SceneObject:
+        """Build an Rx Empty object from a point rx ``AntennaState``."""
         from ..components.endpoints import RxComponent
 
-        obj = SceneObject(name=rx.name, mesh_type="Empty")
+        obj = SceneObject(name=endpoint_name(rx) or "Rx", mesh_type="Empty")
         comp = obj.add_component(RxComponent())
         EndpointMap._write_polarization(comp, rx.polarization)
         EndpointMap._write_orientation(comp, rx.orientation)
-        EndpointMap._set_position(obj, rx.position)
-        ArraySpecMap.to_studio(comp, rx.array if rx.array is not None else scene_default_array)
+        EndpointMap._set_position(obj, _floats(rx.position))
+        ArraySpecMap.to_studio(comp, None)
         return obj
 
     @staticmethod
-    def radiomap_to_studio(grid: Any, *, frequency: Optional[float], device: str,
+    def radiomap_to_studio(grid: Any, *, frequency: Optional[float] = None,
                            noise_power: Optional[float] = None) -> SceneObject:
-        """Build a RadioMap (Field subclass) object from a platform ``ReceiverGrid`` + config.
+        """Build a RadioMap (Field subclass) object from a ``ReceiverGrid`` + config.
 
-        The grid is stored in the inherited Field's local frame: the object Transform sits
-        at the grid center and ``min_bound`` / ``max_bound`` hold the half-extents on the
-        plane (so the grid follows the Transform).
+        The object Transform sits at the grid center and ``min_bound`` / ``max_bound`` hold
+        the half-extents on the plane (so the grid follows the Transform).
         """
         from ..components.radiomap import RadioMapComponent
 
-        obj = SceneObject(name=grid.name, mesh_type="Empty")
+        obj = SceneObject(name=endpoint_name(grid) or "RadioMap", mesh_type="Empty")
         comp = obj.add_component(RadioMapComponent())
-        comp.frequency = 3.5e9 if frequency is None else float(frequency)
-        comp.device = device
+        if frequency is not None:
+            comp.frequency = float(frequency)
         if noise_power is not None:
             comp.use_noise_power = True
             comp.noise_power = float(noise_power)
 
-        plane = _AXIS_TO_PLANE[str(grid.axis)]
-        _, normal, t0, t1 = _PLANE_INFO[plane]
-        b = grid.bounds
-        c0, c1 = 0.5 * (b[0][0] + b[0][1]), 0.5 * (b[1][0] + b[1][1])
-        center = [0.0, 0.0, 0.0]
-        center[t0], center[t1], center[normal] = c0, c1, float(grid.position)
+        normal, t0, t1 = _PLANE_INFO[str(comp.plane)]
+        x_axis, y_axis = _floats(grid.x_axis), _floats(grid.y_axis)
+        if abs(x_axis[t0] - 1.0) > 1e-6 or abs(y_axis[t1] - 1.0) > 1e-6:
+            raise ValueError(
+                f"ReceiverGrid axes {x_axis}/{y_axis} do not match the RadioMap "
+                f"{comp.plane} plane (+u, +v).")
+        n_u, n_v = int(grid.shape[0]), int(grid.shape[1])
+        d_u, d_v = (float(v) for v in _floats(grid.spacing))
+        origin = _floats(grid.position)
+        half_u, half_v = 0.5 * n_u * d_u, 0.5 * n_v * d_v
+        center = list(origin)
+        center[t0] = origin[t0] - 0.5 * d_u + half_u
+        center[t1] = origin[t1] - 0.5 * d_v + half_v
         mn, mx = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
-        mn[t0], mx[t0] = b[0][0] - c0, b[0][1] - c0
-        mn[t1], mx[t1] = b[1][0] - c1, b[1][1] - c1
+        mn[t0], mx[t0] = -half_u, half_u
+        mn[t1], mx[t1] = -half_v, half_v
 
-        comp.plane = plane
         comp.grid_mode = "Resolution"
         comp.min_bound = mn
         comp.max_bound = mx
-        comp.resolution = EndpointMap._grid_resolution(grid, normal, t0, t1)
+        res = [1.0, 1.0, 1.0]
+        res[t0], res[t1] = float(n_u), float(n_v)
+        comp.resolution = res
         EndpointMap._set_position(obj, center)
         return obj
 
     # --- studio -> platform --------------------------------------------------
 
     @staticmethod
-    def tx_to_platform(ch: Any, obj: SceneObject) -> Any:
-        """Build a platform ``Transmitter`` from a Tx object."""
+    def tx_to_platform(obj: SceneObject, antenna_id: Optional[int] = None) -> Any:
+        """Build a tx ``AntennaState`` from a Tx object."""
+        from witwin.core import AntennaState
+
         comp = obj.get_component(TX_COMPONENT)
-        return ch.Transmitter(
-            name=obj.name, position=tuple(vec(EndpointMap._position(obj))),
-            polarization=tuple(vec(comp.polarization)), power=num(comp.power),
+        _require_plain_antenna(obj.name, comp)
+        return AntennaState(
+            _antenna_id(antenna_id), "tx", _floats(EndpointMap._position(obj)),
             orientation=EndpointMap._read_orientation(comp),
-            array=ArraySpecMap.to_platform(ch, comp))
+            polarization=tuple(vec(comp.polarization)),
+            power_w=num(comp.power),
+            metadata={"name": obj.name},
+        )
 
     @staticmethod
-    def rx_to_platform(ch: Any, obj: SceneObject) -> Any:
-        """Build a platform ``Receiver`` from an Rx object."""
+    def rx_to_platform(obj: SceneObject, antenna_id: Optional[int] = None) -> Any:
+        """Build a point rx ``AntennaState`` from an Rx object."""
+        from witwin.core import AntennaState
+
         comp = obj.get_component(RX_COMPONENT)
-        return ch.Receiver(
-            name=obj.name, position=tuple(vec(EndpointMap._position(obj))),
-            polarization=EndpointMap._read_polarization(comp),
+        _require_plain_antenna(obj.name, comp)
+        return AntennaState(
+            _antenna_id(antenna_id), "rx", _floats(EndpointMap._position(obj)),
             orientation=EndpointMap._read_orientation(comp),
-            array=ArraySpecMap.to_platform(ch, comp))
+            polarization=EndpointMap._read_polarization(comp),
+            metadata={"name": obj.name},
+        )
 
     @staticmethod
-    def radiomap_to_platform(ch: Any, obj: SceneObject) -> Any:
-        """Build a platform ``ReceiverGrid`` from a RadioMap object (the Field region).
+    def radiomap_to_platform(obj: SceneObject, antenna_id: Optional[int] = None) -> Any:
+        """Build a ``ReceiverGrid`` on the RadioMap Field region's cell centers.
 
         The Field's ``min_bound`` / ``max_bound`` are local; the world grid is the object
         Transform position plus those extents on the selected plane.
         """
+        from witwin.core import ReceiverGrid
+
         comp = obj.get_component(RADIOMAP_COMPONENT)
         pos = vec(EndpointMap._position(obj))
         mn, mx = vec(comp.min_bound), vec(comp.max_bound)
         res = vec(comp.resolution)
-        axis, normal, t0, t1 = _PLANE_INFO[str(comp.plane)]
-        bounds = ((pos[t0] + mn[t0], pos[t0] + mx[t0]), (pos[t1] + mn[t1], pos[t1] + mx[t1]))
-        position = pos[normal] + mn[normal]
-        size0 = abs(bounds[0][1] - bounds[0][0])
-        size1 = abs(bounds[1][1] - bounds[1][0])
-        grid_shape = _radiomap_grid_shape(
-            getattr(comp, "grid_mode", "Resolution"),
-            size0,
-            size1,
-            res[t0],
-            res[t1],
-            getattr(comp, "frequency", 0.0),
+        normal, t0, t1 = _PLANE_INFO[str(comp.plane)]
+        lo0, hi0 = sorted((pos[t0] + mn[t0], pos[t0] + mx[t0]))
+        lo1, hi1 = sorted((pos[t1] + mn[t1], pos[t1] + mx[t1]))
+        n_u, n_v = _radiomap_grid_shape(
+            getattr(comp, "grid_mode", "Resolution"), hi0 - lo0, hi1 - lo1,
+            res[t0], res[t1], getattr(comp, "frequency", 0.0),
             getattr(comp, "points_per_wavelength", 4.0),
         )
-        return ch.ReceiverGrid(name=obj.name, axis=axis, position=position,
-                                bounds=bounds, grid_shape=grid_shape)
+        d_u, d_v = (hi0 - lo0) / n_u, (hi1 - lo1) / n_v
+        origin = [0.0, 0.0, 0.0]
+        origin[t0] = lo0 + 0.5 * d_u
+        origin[t1] = lo1 + 0.5 * d_v
+        origin[normal] = pos[normal] + mn[normal]
+        x_axis, y_axis = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
+        x_axis[t0], y_axis[t1] = 1.0, 1.0
+        return ReceiverGrid(
+            _antenna_id(antenna_id), origin, x_axis, y_axis, (n_u, n_v), (d_u, d_v),
+            metadata={"name": obj.name},
+        )
 
     # --- helpers -------------------------------------------------------------
 
@@ -162,8 +195,11 @@ class EndpointMap:
     def _write_orientation(comp: Any, orientation: Optional[Any]) -> None:
         if orientation is None:
             return
+        values = _floats(orientation)
+        if len(values) != 3:
+            raise ValueError("only (yaw, pitch, roll) euler antenna orientations are supported")
         comp.use_orientation = True
-        comp.orientation = list(orientation)
+        comp.orientation = values
 
     @staticmethod
     def _read_orientation(comp: Any) -> Optional[Tuple[float, float, float]]:
@@ -174,27 +210,33 @@ class EndpointMap:
         if polarization is None:
             return
         comp.use_polarization = True
-        comp.polarization = list(polarization)
+        comp.polarization = _floats(polarization)
 
     @staticmethod
     def _read_polarization(comp: Any) -> Optional[Tuple[float, float, float]]:
         return opt_vec3(comp.polarization) if bool(comp.use_polarization) else None
 
-    @staticmethod
-    def _grid_resolution(grid: Any, normal: int, t0: int, t1: int) -> list:
-        # Field resolution vector3; tangential axes from grid_shape (or cell_size counts).
-        res = [1, 1, 1]
-        if grid.grid_shape is not None:
-            res[t0], res[t1] = int(grid.grid_shape[0]), int(grid.grid_shape[1])
-            return res
-        cs = grid.cell_size
-        d0 = cs[0] if isinstance(cs, (tuple, list)) else cs
-        d1 = cs[1] if isinstance(cs, (tuple, list)) else cs
-        e0 = abs(grid.bounds[0][1] - grid.bounds[0][0])
-        e1 = abs(grid.bounds[1][1] - grid.bounds[1][0])
-        res[t0] = max(1, round(e0 / float(d0)))
-        res[t1] = max(1, round(e1 / float(d1)))
-        return res
+
+def _floats(value: Any) -> list:
+    seq = value.detach().cpu().tolist() if hasattr(value, "detach") else vec(value)
+    return [float(v) for v in seq]
+
+
+def _antenna_id(antenna_id: Optional[int]) -> Any:
+    from witwin.core import new_antenna_id
+
+    return new_antenna_id() if antenna_id is None else int(antenna_id)
+
+
+def _require_plain_antenna(name: str, comp: Any) -> None:
+    # witwin-channel 0.5 radiomap solvers advertise no antenna arrays; only the single
+    # isotropic element is ported, so anything else must not silently solve as one.
+    if str(comp.array_kind) != "single":
+        raise ValueError(f"{name}: antenna array '{comp.array_kind}' is not supported "
+                         "on witwin-channel 0.5 yet (use a single element).")
+    if str(comp.pattern) != "iso":
+        raise ValueError(f"{name}: antenna pattern '{comp.pattern}' is not supported "
+                         "on witwin-channel 0.5 yet (use 'iso').")
 
 
 def _radiomap_grid_shape(
