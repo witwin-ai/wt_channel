@@ -117,6 +117,21 @@ def test_radiomap_maps_without_noise_have_no_sinr():
         maps.metric("sinr")
 
 
+def test_grid_map_unflattens_monte_carlo_basic_layout():
+    # MC basic publishes a grid as (T, n_v * n_u), row-major over (v, u); the
+    # deterministic solver already publishes (T, n_v, n_u).
+    from wt_channel.adapter.solve import grid_map
+
+    flat = np.arange(2 * 6, dtype=np.float32).reshape(2, 6)  # T=2, grid (n_u=3, n_v=2)
+    shaped = grid_map(flat, (3, 2))
+
+    assert shaped.shape == (2, 2, 3)
+    assert shaped[1, 1, 2] == flat[1, 1 * 3 + 2]
+    np.testing.assert_array_equal(grid_map(shaped, (3, 2)), shaped)
+    with pytest.raises(ValueError, match="grid map"):
+        grid_map(np.zeros((1, 5), np.float32), (3, 2))
+
+
 def test_value_range_clamps_without_resolve():
     from wt_channel.adapter.solve import RadioMapExtractor, RadioMapMaps
 

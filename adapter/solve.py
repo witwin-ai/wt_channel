@@ -126,9 +126,8 @@ class SolveRunner:
 
             config = ConfigBuilder.deterministic(comp)
         result = solver.solve(world, config, reference_frequency_hz=frequency)
-        gain = _to_numpy(result.path_gain)
-        if gain.ndim != 3:
-            raise ValueError(f"expected a (T, n_v, n_u) grid map, got shape {gain.shape}")
+        grid = ChannelAdapter.endpoint_by_name(world, receiver)
+        gain = grid_map(_to_numpy(result.path_gain), tuple(grid.shape))
         return RadioMapMaps(path_gain=gain, tx_power_w=np.array([num(tx.power_w)], np.float32),
                             noise_power_w=noise)
 
@@ -155,6 +154,21 @@ class RadioMapExtractor:
             data = np.clip(data, vmin, vmax)
         extent = [float(bounds[0]), float(bounds[1]), float(bounds[2]), float(bounds[3])]
         return MapImage(np.asarray(data, dtype=np.float32), extent, label)
+
+
+def grid_map(gain: np.ndarray, grid_shape: tuple) -> np.ndarray:
+    """A solver grid result as ``(T, n_v, n_u)`` for a ReceiverGrid of shape ``(n_u, n_v)``.
+
+    The deterministic solver publishes ``(T, n_v, n_u)``; Monte Carlo basic publishes
+    ``(T, n_v * n_u)``, row-major over ``(v, u)`` (its component maps carry the 2D layout).
+    """
+    n_u, n_v = int(grid_shape[0]), int(grid_shape[1])
+    gain = np.asarray(gain, dtype=np.float32)
+    if gain.ndim == 3 and gain.shape[1:] == (n_v, n_u):
+        return gain
+    if gain.ndim == 2 and gain.shape[1] == n_v * n_u:
+        return gain.reshape(gain.shape[0], n_v, n_u)
+    raise ValueError(f"expected a (T, {n_v}, {n_u}) grid map, got shape {gain.shape}")
 
 
 def _to_numpy(tensor: Any) -> np.ndarray:
