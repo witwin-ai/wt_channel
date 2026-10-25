@@ -43,6 +43,8 @@ from .category import CATEGORY
 _DET = {"field_name": "solver", "operator": "eq", "value": "deterministic"}
 _MC = {"field_name": "solver", "operator": "eq", "value": "montecarlo"}
 _STRAT = {"field_name": "det_quadrature_mode", "operator": "eq", "value": "stratified_fixed_n"}
+_LIVE_DET = {"field_name": "live_preview", "operator": "eq", "value": "deterministic"}
+_LIVE_MC = {"field_name": "live_preview", "operator": "eq", "value": "montecarlo"}
 _SCENE = "Channel"
 # dB cells at or below this received nothing (the map floors 0 at -300 dB).
 _NO_COVERAGE_DB = -250.0
@@ -118,7 +120,16 @@ class RadioMapComponent(FieldComponent):
     live_update = bool_field(True, group=_SCENE, title="Live",
                              description="After a solve, follow a dragged Tx: Monte Carlo "
                                          "previews, then one solve with this solver once it stops.")
-    live_preview_samples = int_field(262144, min=1024, group=_SCENE, show_if="live_update",
+    live_preview = string_field("deterministic", options=["deterministic", "montecarlo"],
+                                enum_toggle=True, group=_SCENE, show_if="live_update",
+                                description="Previews while dragging: coarse deterministic "
+                                            "(shows diffraction) or Monte Carlo basic.")
+    live_preview_resolution = int_field(64, min=8, group=_SCENE, show_if=_LIVE_DET,
+                                        description="Cells per side of a deterministic preview.")
+    live_preview_bounces = int_field(1, min=1, group=_SCENE, show_if=_LIVE_DET,
+                                     description="Reflections in a deterministic preview "
+                                                 "(UCSD 64x64: 1 -> ~0.4 s, 2 -> ~1.0 s).")
+    live_preview_samples = int_field(262144, min=1024, group=_SCENE, show_if=_LIVE_MC,
                                      description="Monte Carlo basic rays per preview.")
     live_settle_s = float_field(1.5, min=0.0, group=_SCENE, show_if="live_update",
                                 description="Seconds the Tx must be still before the full solve.")
@@ -311,10 +322,22 @@ class RadioMapComponent(FieldComponent):
         self.set_field("live_status", text, force=True)
 
     async def _live_preview(self) -> None:
-        self._set_live_status("Previewing (Monte Carlo); the full solve runs once the Tx stops")
         config = self._solver_config(self._live_tx_name, self._owner.name)
-        config["component"].update(solver="montecarlo", mc_integrator="basic",
-                                   mc_samples_per_tx=int(self.live_preview_samples))
+        if str(self.live_preview) == "montecarlo":
+            self._set_live_status("Previewing (Monte Carlo); the full solve runs once the Tx stops")
+            config["component"].update(solver="montecarlo", mc_integrator="basic",
+                                       mc_samples_per_tx=int(self.live_preview_samples))
+        else:
+            # A coarse deterministic grid keeps diffraction visible while dragging (UCSD
+            # 64x64, one reflection: ~0.4 s, 78 % of shadow cells lit vs ~12 % for Monte
+            # Carlo basic at 256k rays); the refine restores the full grid and bounces.
+            n_u, n_v = self._scaled_grid(int(self.live_preview_resolution))
+            self._set_live_status(f"Previewing (deterministic, {n_u}x{n_v}); "
+                                  "the full solve runs once the Tx stops")
+            config["component"].update(solver="deterministic",
+                                       det_max_bounces=int(self.live_preview_bounces),
+                                       det_max_diffraction_order=1)
+            config["grid_shape"] = [n_u, n_v]
         await self._live_solve(config, None)
 
     async def _live_refine(self, is_current) -> None:
@@ -344,14 +367,19 @@ class RadioMapComponent(FieldComponent):
 
         return tuple(int(v) for v in EndpointMap.radiomap_to_platform(self._owner).shape)
 
+    def _scaled_grid(self, cells: int):
+        """The RadioMap's grid scaled so its longer side has ``cells`` cells."""
+        n_u, n_v = self._grid_shape()
+        scale = min(1.0, cells / max(n_u, n_v))
+        return max(1, round(n_u * scale)), max(1, round(n_v * scale))
+
     def _refine_passes(self):
         """Grid overrides of the refine passes; ``None`` is the RadioMap's own grid."""
         n_u, n_v = self._grid_shape()
         coarse = int(self.live_refine_coarse)
         if coarse <= 0 or max(n_u, n_v) <= coarse:
             return [None]
-        scale = coarse / max(n_u, n_v)
-        return [(max(1, round(n_u * scale)), max(1, round(n_v * scale))), None]
+        return [self._scaled_grid(coarse), None]
 
     def _live_cancel(self) -> None:
         if self._live_run_id:

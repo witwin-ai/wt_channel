@@ -89,9 +89,13 @@ def test_moving_the_tx_previews_then_refines_without_resending_the_scene(solver_
     assert not preview["scene_sent"]
     assert preview["scene_key"] == explicit["scene_key"]
     assert preview["tx_position"] == [12.0, 30.0, 0.0]
-    assert preview["component"]["solver"] == "montecarlo"
-    assert preview["component"]["mc_integrator"] == "basic"
-    assert preview["component"]["mc_samples_per_tx"] == 262144
+    # Previews are deterministic on a coarse grid so diffraction shows while dragging
+    # (UCSD 64^2, one reflection: ~0.4 s, 78 % of shadow cells lit; Monte Carlo basic at
+    # 256k rays lit ~12 %).
+    assert preview["component"]["solver"] == "deterministic"
+    assert preview["grid_shape"] == [64, 64]
+    assert preview["component"]["det_max_bounces"] == 1
+    assert preview["component"]["det_max_diffraction_order"] == 1
 
     # The refine comes in two passes: a coarse grid first (UCSD: 128^2 in ~1.6 s), then
     # the RadioMap's own grid (256^2, ~6.5 s).
@@ -294,3 +298,19 @@ def test_a_coarse_map_is_shown_on_the_radiomap_grid(solver_api, monkeypatch):
     comp = asyncio.run(main())
     assert shown == [(4, 1, 4)]
     np.testing.assert_allclose(list(comp.resolution), [4.0, 1.0, 4.0])
+
+
+def test_monte_carlo_previews_stay_available(solver_api):
+    async def main():
+        studio, tx, comp = _scene()
+        comp.live_preview = "montecarlo"
+        await comp.solve_for("Tx")
+        _move(tx, 12.0)
+        await comp._live.idle()
+
+    asyncio.run(main())
+    preview = solver_api.calls[1]
+    assert preview["component"]["solver"] == "montecarlo"
+    assert preview["component"]["mc_integrator"] == "basic"
+    assert preview["component"]["mc_samples_per_tx"] == 262144
+    assert "grid_shape" not in preview
