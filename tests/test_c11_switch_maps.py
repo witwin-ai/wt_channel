@@ -86,3 +86,20 @@ def test_a_second_out_of_memory_is_reported(host):
     with pytest.raises(torch.cuda.OutOfMemoryError):
         host.module.solve(_Ctx(), _studio_with_tx(), _config("sydney"))
     assert host.events.runs == 2
+
+
+def test_each_solve_keeps_only_the_newest_compiled_scene(host, monkeypatch):
+    # Every live preview builds a new Core world (the Tx moved), and witwin-channel kept
+    # each compiled world: on MIT the allocated GPU memory grew 1.46 GB per preview
+    # (1.5 -> 8.8 GB over one drag). The newest one stays, so the next preview still
+    # reuses its RayD acceleration structure.
+    from witwin.channel.scene import compiler
+
+    registry = compiler._CompileRegistry()
+    monkeypatch.setattr(compiler, "_REGISTRY", registry)
+    for i in range(3):
+        registry.put(("older", i), object())
+
+    host.module.solve(_Ctx(), _studio_with_tx(), _config("mit"))
+
+    assert list(registry._compiled) == [("older", 2)]

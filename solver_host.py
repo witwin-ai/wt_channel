@@ -119,6 +119,7 @@ def solve(ctx, scene, config):
         _release_torch_cache()
     try:
         result = _run_with_memory_retry(scene, comp, transmitter, receiver, grid_shape)
+        _keep_newest_compiled_scene()
         ctx.progress(0.9, "extracting Channel radiomap cache")
         cache = _radiomap_cache(result)
     finally:
@@ -165,6 +166,25 @@ def _forget_compiled_scenes() -> None:
     channel_scene.clear_compile_cache()
     gc.collect()
     _release_torch_cache()
+
+
+def _keep_newest_compiled_scene() -> None:
+    """Drop every compiled scene but the newest from witwin-channel's LRU.
+
+    Each live preview builds a new Core world (the Tx moved) and witwin-channel kept
+    every compiled one: on MIT the allocated GPU memory grew 1.46 GB per preview
+    (1.5 -> 8.8 GB over a single drag). The newest stays, so the next preview still
+    reuses its RayD acceleration structure (previews stay ~0.5 s).
+    """
+    from witwin.channel.scene import compiler
+
+    registry = getattr(compiler, "_REGISTRY", None)
+    compiled = getattr(registry, "_compiled", None)
+    if compiled is None:  # a witwin-channel without this LRU: nothing to trim
+        return
+    with registry._lock:
+        while len(compiled) > 1:
+            compiled.popitem(last=False)
 
 
 def _release_torch_cache() -> None:
