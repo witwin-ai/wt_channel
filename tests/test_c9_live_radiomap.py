@@ -39,9 +39,12 @@ def solver_api(monkeypatch):
             return True
 
     monkeypatch.setattr(radiomap_mod, "api", SimpleNamespace(solvers=Solvers()))
+    toasts = []
     monkeypatch.setattr(radiomap_mod, "Notifications", SimpleNamespace(
-        success=lambda *a: None, error=lambda *a: None))
-    return SimpleNamespace(calls=calls, failures=failures)
+        info=lambda *a: toasts.append(("info",) + a),
+        success=lambda *a: toasts.append(("success",) + a),
+        error=lambda *a: toasts.append(("error",) + a)))
+    return SimpleNamespace(calls=calls, failures=failures, toasts=toasts)
 
 
 def _scene():
@@ -193,3 +196,61 @@ def test_live_updates_do_not_toast_every_map_refresh(solver_api, monkeypatch):
     explicit = asyncio.run(main())
     assert explicit == 1          # an explicit solve still reports its map
     assert len(toasts) == explicit  # the preview and the refine stay quiet
+
+
+def test_the_user_can_tell_when_the_refine_after_a_drag_is_done(solver_api):
+    # The last Monte Carlo preview lands ~2 s after the drag and looked final; the
+    # deterministic refine replaces it ~10 s later with nothing on screen saying so.
+    async def main():
+        studio, tx, comp = _scene()
+        await comp.solve_for("Tx")
+        solver_api.toasts.clear()
+        statuses = []
+        comp.set_field = _recording_set_field(comp, statuses)
+        _move(tx, 12.0)
+        await comp._live.idle()
+        return comp, statuses
+
+    comp, statuses = asyncio.run(main())
+    kinds = [(kind, text) for kind, _title, text in solver_api.toasts]
+    assert [k for k, _ in kinds] == ["info", "success"]
+    assert "deterministic" in kinds[0][1] and "refin" in kinds[0][1].lower()
+    assert "refined" in kinds[1][1].lower()
+    assert statuses[0].lower().startswith("previewing")
+    assert any(s.lower().startswith("refining") for s in statuses)
+    assert str(comp.live_status).lower().startswith("done")
+
+
+def test_a_refine_cut_short_by_another_move_does_not_claim_success(solver_api):
+    async def main():
+        studio, tx, comp = _scene()
+        await comp.solve_for("Tx")
+        solver_api.toasts.clear()
+        stale = {"left": 1}
+        original = comp._live_refine
+
+        async def refine_then_move(is_current):
+            if stale["left"]:
+                stale["left"] -= 1
+                _move(tx, 20.0)  # the Tx moves while this refine runs
+            await original(is_current)
+
+        comp._live = None
+        _move(tx, 12.0)
+        comp._live._refine = refine_then_move
+        await comp._live.idle()
+
+    asyncio.run(main())
+    successes = [t for t in solver_api.toasts if t[0] == "success"]
+    assert len(successes) == 1  # only the refine at the final position reports done
+
+
+def _recording_set_field(comp, statuses):
+    original = comp.set_field
+
+    def set_field(name, value, *args, **kwargs):
+        if name == "live_status":
+            statuses.append(str(value))
+        return original(name, value, *args, **kwargs)
+
+    return set_field

@@ -13,6 +13,7 @@ field's own plane data — the radiomap shows as the colored 2D plane inside its
 Live solve needs CUDA RayD/OptiX (the round-trip / config tests run on CPU).
 """
 import asyncio
+import time
 import uuid
 
 import numpy as np
@@ -121,6 +122,9 @@ class RadioMapComponent(FieldComponent):
                                      description="Monte Carlo basic rays per preview.")
     live_settle_s = float_field(1.5, min=0.0, group=_SCENE, show_if="live_update",
                                 description="Seconds the Tx must be still before the full solve.")
+    live_status = string_field("", group=_SCENE, show_if="live_update", readonly=True,
+                               description="What the live update is doing: previewing, "
+                                           "refining with this solver, or done.")
     metric = string_field("path_gain", options=["path_gain", "rss", "sinr"], enum_toggle=True,
                           group=_SCENE, description="Radiomap metric to display.")
     tx_index = int_field(0, min=0, group=_SCENE, description="Transmitter index (multi-Tx results).")
@@ -300,14 +304,31 @@ class RadioMapComponent(FieldComponent):
         elif self._live_loop is not None:
             self._live_loop.call_soon_threadsafe(self._live.moved)
 
+    def _set_live_status(self, text: str) -> None:
+        self.set_field("live_status", text, force=True)
+
     async def _live_preview(self) -> None:
+        self._set_live_status("Previewing (Monte Carlo); the full solve runs once the Tx stops")
         config = self._solver_config(self._live_tx_name, self._owner.name)
         config["component"].update(solver="montecarlo", mc_integrator="basic",
                                    mc_samples_per_tx=int(self.live_preview_samples))
         await self._live_solve(config, None)
 
     async def _live_refine(self, is_current) -> None:
-        await self._live_solve(self._solver_config(self._live_tx_name, self._owner.name), is_current)
+        # The last preview lands a moment after the drag and looks final, so say when the
+        # full solve starts and when its map is on screen.
+        solver = str(self.solver)
+        self._set_live_status(f"Refining ({solver})...")
+        Notifications.info("Channel", f"Refining the radio map with the {solver} solver...")
+        started = time.perf_counter()
+        outcome = await self._live_solve(
+            self._solver_config(self._live_tx_name, self._owner.name), is_current)
+        if outcome == "applied":
+            seconds = time.perf_counter() - started
+            self._set_live_status(f"Done: {solver}, {seconds:.1f} s")
+            Notifications.success("Channel", f"Radio map refined ({solver}, {seconds:.1f} s)")
+        else:
+            self._set_live_status("Tx moved: refining again once it stops")
 
     def _live_cancel(self) -> None:
         if self._live_run_id:
@@ -316,7 +337,8 @@ class RadioMapComponent(FieldComponent):
     def _remember_live_run(self, run_id: str) -> None:
         self._live_run_id = run_id
 
-    async def _live_solve(self, config: dict, is_current) -> None:
+    async def _live_solve(self, config: dict, is_current) -> str:
+        """Solve at the Tx's current position; "applied", "stale" or "cancelled"."""
         scene = self._owner.scene
         tx = scene.get_object_by_name(self._live_tx_name)
         if tx is None:
@@ -341,13 +363,14 @@ class RadioMapComponent(FieldComponent):
                 self._scene_key = ""  # the solver host restarted: resend the Scene once
                 continue
             if run.status == "cancelled":
-                return
+                return "cancelled"
+            self._set_live_status(f"Failed: {message}")
             Notifications.error("Channel", f"live radio map update failed: {message}")
             raise RuntimeError(message)
         else:
-            return
+            return "cancelled"
         if is_current is not None and not is_current():
-            return  # the Tx moved while this solve ran
+            return "stale"  # the Tx moved while this solve ran
         self._solver_result_handle = str((run.outputs or {}).get("resultHandle") or "")
         self._solver_run_id = run.run_id
         self._result = None
@@ -356,6 +379,7 @@ class RadioMapComponent(FieldComponent):
             self.update_map()
         finally:
             self._quiet_volume = False
+        return "applied"
 
     def _notify_volume_progress(self, *args, **kwargs):
         if self._quiet_volume:
