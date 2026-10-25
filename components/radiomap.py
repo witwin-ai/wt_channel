@@ -13,6 +13,7 @@ field's own plane data — the radiomap shows as the colored 2D plane inside its
 Live solve needs CUDA RayD/OptiX (the round-trip / config tests run on CPU).
 """
 import asyncio
+import uuid
 
 import numpy as np
 
@@ -34,6 +35,7 @@ from witwin_server.core.components.field_region import FREQUENCY_UNITS, FieldCom
 from witwin_server.features.platform.bridge import FieldViz
 
 from ..adapter.common import json_value
+from ..adapter.live import LiveTxScheduler
 from ..adapter.solve import RadioMapExtractor
 from .category import CATEGORY
 
@@ -50,6 +52,11 @@ _MC_FILTER = "Monte Carlo Filtering"
 _MC_TUNING = "Monte Carlo Tuning"
 _EDGE = "Edge Policy"
 TX_COMPONENT = "ChannelTx"
+# RadioMap fields that change the receiver grid the solver host has cached.
+_GRID_FIELDS = frozenset({"min_bound", "max_bound", "resolution", "grid_mode",
+                          "points_per_wavelength", "plane", "dimension", "frequency"})
+_SCENE_EVENTS = ("object_updated", "component_updated", "object_added", "object_removed",
+                 "component_added", "component_removed")
 
 # plane -> (normal axis index, tangential0 index, tangential1 index).
 PLANE_AXES = {"XY": (2, 0, 1), "XZ": (1, 0, 2), "YZ": (0, 1, 2)}
@@ -64,6 +71,16 @@ class RadioMapComponent(FieldComponent):
     _result = None   # runtime RadioMapResult (never serialized)
     _solver_result_handle = ""
     _solver_run_id = ""
+    # Live Tx drag (runtime only): the scheduler, the scene subscribed to, the event
+    # loop the solves run on, the solver host's cached-scene key and the live run.
+    _live = None
+    _live_scene = None
+    _live_loop = None
+    _live_tx_name = ""
+    _live_run_id = ""
+    _scene_key = ""
+    _explicit_solving = False
+    _applying_map = False
 
     # --- lock the inherited Field to a 2D XZ-plane solvable grid ---
     dimension = string_field("2D", options=["2D", "3D"], hidden=True)
@@ -96,6 +113,13 @@ class RadioMapComponent(FieldComponent):
                           description="Monte Carlo is the robust default; deterministic needs its OptiX pipeline.")
     transmitter = component_field("ChannelTx", group=_SCENE,
                                   description="Transmitter object (empty = first Tx in the scene).")
+    live_update = bool_field(True, group=_SCENE, title="Live",
+                             description="After a solve, follow a dragged Tx: Monte Carlo "
+                                         "previews, then one solve with this solver once it stops.")
+    live_preview_samples = int_field(262144, min=1024, group=_SCENE, show_if="live_update",
+                                     description="Monte Carlo basic rays per preview.")
+    live_settle_s = float_field(1.5, min=0.0, group=_SCENE, show_if="live_update",
+                                description="Seconds the Tx must be still before the full solve.")
     metric = string_field("path_gain", options=["path_gain", "rss", "sinr"], enum_toggle=True,
                           group=_SCENE, description="Radiomap metric to display.")
     tx_index = int_field(0, min=0, group=_SCENE, description="Transmitter index (multi-Tx results).")
@@ -180,6 +204,14 @@ class RadioMapComponent(FieldComponent):
 
     async def solve_for(self, transmitter: str):
         """Solve this map for the named Tx object (the Solve button and the Agent tool)."""
+        self._live_prepare(transmitter)
+        self._explicit_solving = True
+        try:
+            return await self._solve_explicit(transmitter)
+        finally:
+            self._explicit_solving = False
+
+    async def _solve_explicit(self, transmitter: str):
         from ..adapter.channel_adapter import ChannelAdapter
 
         scene = self._owner.scene
@@ -188,11 +220,16 @@ class RadioMapComponent(FieldComponent):
                                 "(e.g. a ground plane or building). Add geometry to the scene.")
             return "No structures in scene"
         try:
+            # The full Scene goes out and seeds the solver host's cache for live previews.
+            scene_key = uuid.uuid4().hex
+            config = self._solver_config(transmitter, self._owner.name)
+            config["scene_key"] = scene_key
+            self._scene_key = ""
             run = await asyncio.to_thread(
                 api.solvers.solve,
                 "witwin.channel.radiomap",
                 scene=scene,
-                config=self._solver_config(transmitter, self._owner.name),
+                config=config,
             )
             if run.status != "succeeded":
                 message = (run.error or {}).get("message") or "radiomap solve failed"
@@ -204,6 +241,7 @@ class RadioMapComponent(FieldComponent):
                 return "Solve failed: no result handle"
             self._solver_result_handle = str(handle)
             self._solver_run_id = run.run_id
+            self._scene_key = scene_key
             self._result = None
             self.update_map()
         except Exception as exc:  # noqa: BLE001 - GPU solver boundary: notify, don't crash the button
@@ -212,6 +250,107 @@ class RadioMapComponent(FieldComponent):
         await asyncio.sleep(0)  # flush the field-update broadcasts on the (free) loop
         Notifications.success("Channel", f"{str(self.solver)} radiomap solved")
         return "Solve complete"
+
+    # --- live Tx drag ----------------------------------------------------------
+
+    def _live_prepare(self, transmitter: str) -> None:
+        """Before an explicit solve: drop pending live work and watch this scene."""
+        self._live_tx_name = transmitter
+        self._live_loop = asyncio.get_running_loop()
+        if self._live is not None:
+            self._live.reset()
+        scene = self._owner.scene
+        if self._live_scene is scene:
+            return
+        if self._live_scene is not None:
+            for event in _SCENE_EVENTS:
+                self._live_scene.off(event, self._on_scene_event)
+        for event in _SCENE_EVENTS:
+            scene.on(event, self._on_scene_event)
+        self._live_scene = scene
+
+    def _on_scene_event(self, scene, object_id=None, object=None, update_type=None,
+                        component_name=None, field_name=None, **_):
+        if self._owner is None or self._owner.scene is not scene:
+            return
+        obj = object if object is not None else (scene.get_object(object_id) if object_id else None)
+        is_tx = obj is not None and obj.name == self._live_tx_name
+        if is_tx and (update_type == "transform" or component_name == "Transform"):
+            if update_type == "transform":
+                self._tx_moved()
+            return
+        if obj is self._owner and component_name is not None and (
+                self._applying_map or field_name not in _GRID_FIELDS):
+            return  # this map's own display state (the solved plane data)
+        self._scene_key = ""  # any other edit: the solver host's cached scene is stale
+
+    def _tx_moved(self) -> None:
+        if not (bool(self.live_update) and self._solver_result_handle) or self._explicit_solving:
+            return
+        if self._live is None:
+            self._live = LiveTxScheduler(self._live_preview, self._live_refine, self._live_cancel)
+        self._live.settle_s = float(self.live_settle_s)
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is self._live_loop:
+            self._live.moved()
+        elif self._live_loop is not None:
+            self._live_loop.call_soon_threadsafe(self._live.moved)
+
+    async def _live_preview(self) -> None:
+        config = self._solver_config(self._live_tx_name, self._owner.name)
+        config["component"].update(solver="montecarlo", mc_integrator="basic",
+                                   mc_samples_per_tx=int(self.live_preview_samples))
+        await self._live_solve(config, None)
+
+    async def _live_refine(self, is_current) -> None:
+        await self._live_solve(self._solver_config(self._live_tx_name, self._owner.name), is_current)
+
+    def _live_cancel(self) -> None:
+        if self._live_run_id:
+            api.solvers.cancel(self._live_run_id, "Tx moved")
+
+    def _remember_live_run(self, run_id: str) -> None:
+        self._live_run_id = run_id
+
+    async def _live_solve(self, config: dict, is_current) -> None:
+        scene = self._owner.scene
+        tx = scene.get_object_by_name(self._live_tx_name)
+        if tx is None:
+            raise RuntimeError(f"transmitter {self._live_tx_name!r} is gone")
+        config["tx_position"] = [float(v) for v in tx.get_component("Transform").position]
+        for _ in range(2):
+            send_scene = not self._scene_key
+            if send_scene:
+                self._scene_key = uuid.uuid4().hex
+            config["scene_key"] = self._scene_key
+            run = await asyncio.to_thread(
+                api.solvers.solve,
+                "witwin.channel.radiomap",
+                scene=scene if send_scene else None,
+                config=config,
+                on_submitted=self._remember_live_run,
+            )
+            if run.status == "succeeded":
+                break
+            message = (run.error or {}).get("message") or "radiomap solve failed"
+            if "scene_cache_miss" in message and not send_scene:
+                self._scene_key = ""  # the solver host restarted: resend the Scene once
+                continue
+            if run.status == "cancelled":
+                return
+            Notifications.error("Channel", f"live radio map update failed: {message}")
+            raise RuntimeError(message)
+        else:
+            return
+        if is_current is not None and not is_current():
+            return  # the Tx moved while this solve ran
+        self._solver_result_handle = str((run.outputs or {}).get("resultHandle") or "")
+        self._solver_run_id = run.run_id
+        self._result = None
+        self.update_map()
 
     @button(display_name="Update Map", group=_SCENE)
     def update_map(self):
@@ -232,9 +371,13 @@ class RadioMapComponent(FieldComponent):
                                             log_scale=bool(self.log_scale))
             data = img.data
             label = img.label
-        self.set_volume_data(self._to_plane_volume(self._display_values(data)))  # normalizes + sets resolution
-        self.set_field("render_mode", "Slices", force=True)
-        self.export_volume_data()                              # caches -> volume resource -> plane shows
+        self._applying_map = True  # these writes are display state, not a grid edit
+        try:
+            self.set_volume_data(self._to_plane_volume(self._display_values(data)))  # normalizes + sets resolution
+            self.set_field("render_mode", "Slices", force=True)
+            self.export_volume_data()                              # caches -> volume resource -> plane shows
+        finally:
+            self._applying_map = False
         if bool(self.send_to_results):
             FieldViz.show_2d(data, title=label)
         return "Map updated"
