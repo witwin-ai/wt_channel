@@ -395,7 +395,7 @@ def test_radiomap_component_uses_solver_api_for_solve(monkeypatch):
     assert fake.solve_kwargs["config"]["component"]["solver"] == "montecarlo"
     assert fake.solve_kwargs["config"]["component"]["mc_num_samples"] == 123
     assert fake.queries[0][2] == "extract_map"
-    assert notifications["success"] == [("Channel", "montecarlo radiomap solved")]
+    assert notifications["success"] == []  # the map itself (and Live Status) report the solve
     assert notifications["error"] == []
 
 

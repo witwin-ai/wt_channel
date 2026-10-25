@@ -84,7 +84,6 @@ class RadioMapComponent(FieldComponent):
     _scene_key = ""
     _explicit_solving = False
     _applying_map = False
-    _quiet_volume = False
 
     # --- lock the inherited Field to a 2D XZ-plane solvable grid ---
     dimension = string_field("2D", options=["2D", "3D"], hidden=True)
@@ -267,7 +266,6 @@ class RadioMapComponent(FieldComponent):
             Notifications.error("Channel", f"{self.solver} solve failed: {exc}")
             return f"Solve failed: {exc}"
         await asyncio.sleep(0)  # flush the field-update broadcasts on the (free) loop
-        Notifications.success("Channel", f"{str(self.solver)} radiomap solved")
         return "Solve complete"
 
     # --- live Tx drag ----------------------------------------------------------
@@ -346,7 +344,6 @@ class RadioMapComponent(FieldComponent):
         # A coarse pass first (UCSD deterministic: 128^2 in ~1.6 s) puts a map with every
         # propagation effect on screen quickly; the RadioMap's own grid follows (~6.5 s).
         solver = str(self.solver)
-        Notifications.info("Channel", f"Refining the radio map with the {solver} solver...")
         started = time.perf_counter()
         for shape in self._refine_passes():
             n_u, n_v = shape or self._grid_shape()
@@ -359,7 +356,6 @@ class RadioMapComponent(FieldComponent):
                 return
         seconds = time.perf_counter() - started
         self._set_live_status(f"Done: {solver}, {seconds:.1f} s")
-        Notifications.success("Channel", f"Radio map refined ({solver}, {seconds:.1f} s)")
 
     def _grid_shape(self):
         """The RadioMap's own receiver grid ``(n_u, n_v)``."""
@@ -425,17 +421,13 @@ class RadioMapComponent(FieldComponent):
         self._solver_result_handle = str((run.outputs or {}).get("resultHandle") or "")
         self._solver_run_id = run.run_id
         self._result = None
-        self._quiet_volume = True  # several refreshes per second: no toast for each
-        try:
-            self.update_map()
-        finally:
-            self._quiet_volume = False
+        self.update_map()
         return "applied"
 
     def _notify_volume_progress(self, *args, **kwargs):
-        if self._quiet_volume:
-            return None
-        return super()._notify_volume_progress(*args, **kwargs)
+        # The core toasts "Volume Cached" for every plane publish; a radio map republishes
+        # on every solve and live preview, and Live Status already says what is happening.
+        return None
 
     @button(display_name="Update Map", group=_SCENE)
     def update_map(self):
