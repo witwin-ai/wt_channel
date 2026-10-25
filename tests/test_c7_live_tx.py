@@ -34,7 +34,7 @@ def host(monkeypatch):
 
     seen = []
 
-    def fake_run(scene, comp, *, transmitter, receiver):
+    def fake_run(scene, comp, *, transmitter, receiver, grid_shape=None):
         obj = next(o for o in scene.objects.values() if o.name == transmitter)
         seen.append((scene, [float(v) for v in obj.get_component("Transform").position]))
         return SimpleNamespace(metrics=lambda: {"path_gain": np.ones((1, 2, 2), np.float32)})
@@ -91,3 +91,36 @@ def test_deterministic_solves_release_the_torch_cache_around_them(host, monkeypa
     host.module.solve(_Ctx(), None, _config(scene_key="k", tx_position=[1, 30, 0],
                                             component={"solver": "deterministic"}))
     assert released == [1, 2]  # before and after the deterministic solve
+
+
+def test_solver_host_passes_a_grid_shape_override_through(host, monkeypatch):
+    shapes = []
+    original = host.module.SolveRunner.run
+
+    def run(scene, comp, *, transmitter, receiver, grid_shape=None):
+        shapes.append(grid_shape)
+        return original(scene, comp, transmitter=transmitter, receiver=receiver)
+
+    monkeypatch.setattr(host.module.SolveRunner, "run", staticmethod(run))
+    studio = _studio_with_tx()
+    host.module.solve(_Ctx(), studio, _config(scene_key="k"))
+    host.module.solve(_Ctx(), None, _config(scene_key="k", grid_shape=[64, 64]))
+
+    assert shapes == [None, (64, 64)]
+
+
+def test_coarse_deterministic_previews_keep_the_torch_cache(host, monkeypatch):
+    # Emptying the cache costs a re-allocation; only solves big enough to crowd the
+    # GPU (128^2 and up on UCSD) release it.
+    import torch
+
+    released = []
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: released.append(1))
+    studio = _studio_with_tx()
+    host.module.solve(_Ctx(), studio, _config(scene_key="k", grid_shape=[64, 64],
+                                              component={"solver": "deterministic"}))
+    assert released == []
+    host.module.solve(_Ctx(), None, _config(scene_key="k", grid_shape=[128, 128],
+                                            component={"solver": "deterministic"}))
+    assert released == [1, 1]

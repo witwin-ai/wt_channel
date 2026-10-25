@@ -195,3 +195,22 @@ def test_transmitter_roundtrips_through_studio():
     np.testing.assert_allclose(rebuilt.polarization.tolist(), [0.0, 1.0, 0.0], atol=1e-6)
     assert float(rebuilt.power_w) == pytest.approx(3.0)
     assert rebuilt.metadata["name"] == "tx"
+
+
+def test_radiomap_grid_shape_override_keeps_the_region():
+    # Live previews and the coarse refine solve the same region on fewer cells
+    # (UCSD deterministic: 64^2 1.0 s, 128^2 1.6 s, 256^2 6.5 s).
+    from wt_channel.adapter.endpoint_map import EndpointMap
+
+    obj, comp = _radiomap()
+    comp.min_bound = [-10.0, 0.0, -20.0]
+    comp.max_bound = [10.0, 0.0, 20.0]
+    comp.resolution = [8.0, 1.0, 16.0]
+
+    grid = EndpointMap.radiomap_to_platform(obj, grid_shape=(2, 4))
+
+    assert grid.shape == (2, 4)
+    np.testing.assert_allclose(grid.spacing.tolist(), [10.0, 10.0])
+    # min corner (-5, 1.5, -23) plus half a coarse cell on each tangential axis.
+    np.testing.assert_allclose(grid.position.tolist(), [0.0, 1.5, -18.0], atol=1e-6)
+    np.testing.assert_allclose(list(comp.resolution), [8.0, 1.0, 16.0])  # untouched

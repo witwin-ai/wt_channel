@@ -15,7 +15,7 @@ the solved ``(T, n_v, n_u)`` path gain and derives ``rss`` / ``sinr``;
 figure surfaces. Result tensors are runtime state — never serialized into the scene.
 """
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -107,14 +107,16 @@ class SolveRunner:
     """Rebuild the Core world from the studio scene and run a radiomap solve."""
 
     @staticmethod
-    def run(studio_scene: Any, comp: Any, *, transmitter: str, receiver: str) -> RadioMapMaps:
-        """Run the chosen solver family for the given Tx/grid."""
+    def run(studio_scene: Any, comp: Any, *, transmitter: str, receiver: str,
+            grid_shape: Optional[Tuple[int, int]] = None) -> RadioMapMaps:
+        """Run the chosen solver family for the given Tx/grid (``grid_shape`` overrides its cells)."""
         frequency = num(comp.frequency)
         if frequency <= 0.0:
             raise ValueError("radiomap frequency must be positive")
         noise = num(comp.noise_power) if bool(comp.use_noise_power) else None
         world = ChannelAdapter().build(studio_scene, frequency=frequency, noise_power=noise,
-                                       transmitter=transmitter, receiver=receiver)
+                                       transmitter=transmitter, receiver=receiver,
+                                       grid_shape=grid_shape)
         tx = ChannelAdapter.endpoint_by_name(world, transmitter)
         if str(comp.solver) == "montecarlo":
             from witwin.channel.montecarlo import basic, bdpt

@@ -35,6 +35,7 @@ from wt_channel.adapter.solve import SolveRunner
 # the Tx position.
 _SCENES: "OrderedDict[str, Any]" = OrderedDict()
 _MAX_SCENES = 2
+_HEAVY_GRID_CELLS = 128 * 128
 
 
 def _scene_for(scene, config: Dict[str, Any]):
@@ -102,11 +103,19 @@ def solve(ctx, scene, config):
         return cache
     ctx.progress(0.0, "building Channel radiomap scene")
     scene = _scene_for(scene, config)
-    heavy = str(getattr(comp, "solver", "")) == "deterministic"
+    grid_shape = config.get("grid_shape")
+    grid_shape = None if grid_shape is None else tuple(int(v) for v in grid_shape)
+    # Coarse live previews stay small; only solves that can crowd the GPU release it.
+    heavy = str(getattr(comp, "solver", "")) == "deterministic" and (
+        grid_shape is None or grid_shape[0] * grid_shape[1] >= _HEAVY_GRID_CELLS)
     if heavy:
         _release_torch_cache()
     try:
-        result = SolveRunner.run(scene, comp, transmitter=transmitter, receiver=receiver)
+        if grid_shape is None:
+            result = SolveRunner.run(scene, comp, transmitter=transmitter, receiver=receiver)
+        else:
+            result = SolveRunner.run(scene, comp, transmitter=transmitter, receiver=receiver,
+                                     grid_shape=grid_shape)
         ctx.progress(0.9, "extracting Channel radiomap cache")
         cache = _radiomap_cache(result)
     finally:

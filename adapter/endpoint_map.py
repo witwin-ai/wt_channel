@@ -152,11 +152,13 @@ class EndpointMap:
         )
 
     @staticmethod
-    def radiomap_to_platform(obj: SceneObject, antenna_id: Optional[int] = None) -> Any:
+    def radiomap_to_platform(obj: SceneObject, antenna_id: Optional[int] = None,
+                             grid_shape: Optional[Tuple[int, int]] = None) -> Any:
         """Build a ``ReceiverGrid`` on the RadioMap Field region's cell centers.
 
         The Field's ``min_bound`` / ``max_bound`` are local; the world grid is the object
-        Transform position plus those extents on the selected plane.
+        Transform position plus those extents on the selected plane. ``grid_shape``
+        ``(n_u, n_v)`` solves the same region on other cells (live previews, coarse refine).
         """
         from witwin.core import ReceiverGrid
 
@@ -172,6 +174,8 @@ class EndpointMap:
             res[t0], res[t1], getattr(comp, "frequency", 0.0),
             getattr(comp, "points_per_wavelength", 4.0),
         )
+        if grid_shape is not None:
+            n_u, n_v = (max(1, int(v)) for v in grid_shape)
         d_u, d_v = (hi0 - lo0) / n_u, (hi1 - lo1) / n_v
         origin = [0.0, 0.0, 0.0]
         origin[t0] = lo0 + 0.5 * d_u

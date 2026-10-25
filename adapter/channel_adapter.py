@@ -83,7 +83,8 @@ class ChannelAdapter:
 
     def build(self, studio_scene: Scene, *, frequency: Optional[float],
               noise_power: Optional[float] = None, transmitter: Optional[str] = None,
-              receiver: Optional[str] = None) -> Any:
+              receiver: Optional[str] = None,
+              grid_shape: Optional[Tuple[int, int]] = None) -> Any:
         """Rebuild a Core world with explicit scene config (used by the solvers).
 
         ``transmitter`` / ``receiver`` restrict the world to the named Tx and receiver
@@ -102,7 +103,7 @@ class ChannelAdapter:
                     endpoints.append(EndpointMap.rx_to_platform(obj))
             elif obj.get_component(RADIOMAP_COMPONENT) is not None:
                 if receiver is None or obj.name == receiver:
-                    endpoints.append(EndpointMap.radiomap_to_platform(obj))
+                    endpoints.append(EndpointMap.radiomap_to_platform(obj, grid_shape=grid_shape))
             elif self._rf_transparent(obj):
                 continue
             elif obj.get_component("PlatformGeometry") is not None:
