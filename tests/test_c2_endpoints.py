@@ -58,6 +58,35 @@ def test_transmitter_becomes_core_antenna_state():
     assert tx.pattern.kind == "isotropic"
 
 
+def test_receivers_default_to_studio_vertical_polarization():
+    # Studio is Y up. witwin.channel defaults an unpolarized endpoint to +Z, which in
+    # Studio is horizontal: a vertical Tx then met cross-polarized receivers and the
+    # deterministic radio map lost ~31 dB of LoS against Monte Carlo (UCSD, median).
+    from witwin_server.core import SceneObject
+    from wt_channel.adapter.endpoint_map import EndpointMap
+    from wt_channel.components.endpoints import RxComponent
+
+    rmap_obj, _ = _radiomap()
+    rx_obj = SceneObject(name="rx", mesh_type="Empty")
+    rx_obj.add_component(RxComponent())
+
+    for endpoint in (EndpointMap.radiomap_to_platform(rmap_obj), EndpointMap.rx_to_platform(rx_obj)):
+        np.testing.assert_allclose(endpoint.polarization.tolist(), [0.0, 1.0, 0.0])
+
+
+def test_receiver_explicit_polarization_wins():
+    from witwin_server.core import SceneObject
+    from wt_channel.adapter.endpoint_map import EndpointMap
+    from wt_channel.components.endpoints import RxComponent
+
+    obj = SceneObject(name="rx", mesh_type="Empty")
+    comp = obj.add_component(RxComponent())
+    comp.use_polarization = True
+    comp.polarization = [1.0, 0.0, 0.0]
+
+    np.testing.assert_allclose(EndpointMap.rx_to_platform(obj).polarization.tolist(), [1.0, 0.0, 0.0])
+
+
 def test_receiver_optional_fields_default_none():
     from witwin_server.core import SceneObject
     from wt_channel.adapter.endpoint_map import EndpointMap
@@ -71,7 +100,6 @@ def test_receiver_optional_fields_default_none():
 
     assert rx.role == "rx"
     np.testing.assert_allclose(rx.position.tolist(), [4.0, 5.0, 6.0], atol=1e-6)
-    assert rx.polarization is None
     assert rx.orientation is None
 
 

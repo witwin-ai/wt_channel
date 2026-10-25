@@ -436,6 +436,10 @@ def _run_live(solver):
     studio, comp = _live_studio()
     comp.solver = solver
     comp.mc_samples_per_tx = 1 << 16
+    # The deterministic solver adds paths coherently, so the ground reflection's
+    # interference moves its strongest cell away from under the Tx; LoS alone does not.
+    comp.det_max_bounces = 0
+    comp.det_max_diffraction_order = 0
     return SolveRunner.run(studio, comp, transmitter="tx", receiver="rmap")
 
 
@@ -443,9 +447,14 @@ def _assert_map_oriented(maps):
     gain = maps.metric("path_gain")
     assert gain.shape == (1, 16, 16)  # (T, n_v=Z, n_u=X)
     assert np.isfinite(gain).all() and (gain > 0).any()
-    iv, iu = np.unravel_index(int(np.argmax(gain[0])), gain[0].shape)
-    # Tx sits above world (x=+7, z=-7): high u (+X) and low v (-Z) on the grid.
-    assert iu >= 12 and iv <= 3, (iu, iv)
+    # Tx sits above world (x=+7, z=-7): the (high u = +X, low v = -Z) quadrant holds the
+    # most power; a transposed map would favour one of the two mixed quadrants. The
+    # strongest cell is not a robust marker: a vertical dipole has a null straight below
+    # it, so its peak is a ring around the Tx.
+    g = gain[0]
+    quadrants = {"tx": g[:8, 8:].sum(), "u_low_v_low": g[:8, :8].sum(),
+                 "u_high_v_high": g[8:, 8:].sum(), "far": g[8:, :8].sum()}
+    assert max(quadrants, key=quadrants.get) == "tx", quadrants
 
 
 def test_live_montecarlo_radiomap_is_oriented(mc_ready):

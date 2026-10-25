@@ -32,6 +32,9 @@ RADIOMAP_COMPONENT = "RadioMap"
 # The RadioMap reuses the inherited Field region: plane -> (normal, tangential0, tangential1).
 _PLANE_INFO = {"XY": (2, 0, 1), "XZ": (1, 0, 2), "YZ": (0, 1, 2)}
 _SPEED_OF_LIGHT = 299792458.0
+# Studio is Y up. witwin.channel defaults an unpolarized endpoint to +Z, which is
+# horizontal here, so receivers without an explicit polarization use Studio vertical.
+STUDIO_VERTICAL = (0.0, 1.0, 0.0)
 
 
 def endpoint_name(endpoint: Any) -> str:
@@ -144,7 +147,7 @@ class EndpointMap:
         return AntennaState(
             _antenna_id(antenna_id), "rx", _floats(EndpointMap._position(obj)),
             orientation=EndpointMap._read_orientation(comp),
-            polarization=EndpointMap._read_polarization(comp),
+            polarization=EndpointMap._read_polarization(comp) or STUDIO_VERTICAL,
             metadata={"name": obj.name},
         )
 
@@ -178,7 +181,7 @@ class EndpointMap:
         x_axis[t0], y_axis[t1] = 1.0, 1.0
         return ReceiverGrid(
             _antenna_id(antenna_id), origin, x_axis, y_axis, (n_u, n_v), (d_u, d_v),
-            metadata={"name": obj.name},
+            polarization=STUDIO_VERTICAL, metadata={"name": obj.name},
         )
 
     # --- helpers -------------------------------------------------------------
