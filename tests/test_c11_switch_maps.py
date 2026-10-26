@@ -156,3 +156,21 @@ def test_a_cuda_error_restarts_the_solver_host(host, monkeypatch):
     with pytest.raises(ValueError):
         host.module.solve(_Ctx(), _studio_with_tx(), _config("ucsd"))
     assert restarts == [1]  # other errors keep the host
+
+
+def test_a_cuda_error_while_switching_maps_also_restarts_the_host(host, monkeypatch):
+    # The broken context surfaced in torch.cuda.empty_cache() while switching from
+    # Princeton to MIT, before the solve itself, and the host kept running broken.
+    restarts = []
+    monkeypatch.setattr(host.module, "_exit_after_reply", lambda: restarts.append(1))
+    host.module.solve(_Ctx(), _studio_with_tx(), _config("princeton"))
+
+    import witwin.channel.scene as channel_scene
+
+    def broken():
+        raise RuntimeError("CUDA error: out of memory")
+
+    monkeypatch.setattr(channel_scene, "clear_compile_cache", broken)
+    with pytest.raises(RuntimeError, match="CUDA error"):
+        host.module.solve(_Ctx(), _studio_with_tx(), _config("mit"))
+    assert restarts == [1]

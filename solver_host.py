@@ -18,7 +18,7 @@ if str(PLUGIN_PARENT) not in sys.path:
     sys.path.insert(0, str(PLUGIN_PARENT))
 
 import wt_channel  # noqa: F401  (registers Channel components before Scene.from_dict)
-from witwin_server.features.solvers.sdk import query, serve
+from witwin_server.features.solvers.sdk import SolverCancelled, query, serve
 from wt_channel.adapter.path_solve import (
     PathLineBuilder,
     PathSolveRunner,
@@ -91,6 +91,23 @@ def _clamp_index(value: Any, size: int) -> int:
 
 
 def solve(ctx, scene, config):
+    """Solve; a CUDA error anywhere in it (also while switching maps) restarts the host.
+
+    The broken context first surfaced in ``torch.cuda.empty_cache()`` while switching
+    from Princeton to MIT, before the solve itself, and the host kept running broken.
+    """
+    try:
+        return _solve(ctx, scene, config)
+    except SolverCancelled:
+        raise
+    except Exception as exc:  # noqa: BLE001 - re-raised below without its frames
+        failure = (type(exc), str(exc))
+    if "cuda error" in failure[1].lower():
+        _exit_after_reply()
+    raise _plain_error(*failure)
+
+
+def _solve(ctx, scene, config):
     config = config or {}
     mode = str(config.get("mode") or "radiomap")
     comp = _component(config)
@@ -130,9 +147,10 @@ def solve(ctx, scene, config):
         # Outside the except block, so the failed attempt's frames - and the GPU tensors
         # they hold - are gone: Princeton ran out of memory and the solver host kept all
         # 16 GB, so every later solve (other maps, Monte Carlo retries) failed too.
-        _forget_compiled_scenes()
-        if "cuda error" in failure[1].lower():
-            _exit_after_reply()
+        try:
+            _forget_compiled_scenes()
+        except Exception:  # noqa: BLE001 - a broken CUDA context: solve() restarts the host
+            pass
         raise _plain_error(*failure)
     if heavy:
         _release_torch_cache()
