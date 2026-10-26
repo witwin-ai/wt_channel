@@ -40,20 +40,28 @@ def test_a_solved_map_is_found_again_after_a_restart(solver_api, tmp_path):
     assert [p.name for p in volumes.iterdir()] == [f"{asset}.bin"]
 
 
-def test_only_the_final_map_of_a_drag_is_written_and_it_replaces_the_old_one(solver_api, tmp_path):
+def test_only_full_maps_are_written_and_the_previous_one_is_kept_until_the_next(solver_api, tmp_path):
+    # The saved Scene points at the previous file until the next autosave (every 30 s),
+    # so deleting it right away left a dead reference if Studio closed in between.
     studio, tx, comp = _scene()
     _, _, volumes = _with_assets(studio, tmp_path)
+    finals = []
 
     async def main():
         assert await comp.solve_for("Tx") == "Solve complete"
+        finals.append(_asset_id(comp))
         _move(tx, 12.0)
         await comp._live.idle()
+        finals.append(_asset_id(comp))
+        assert await comp.solve_for("Tx") == "Solve complete"
+        finals.append(_asset_id(comp))
 
     asyncio.run(main())
 
-    # Explicit solve, preview, coarse refine, full refine: one file, the latest full map.
-    assert len(solver_api.calls) == 4
-    assert [p.name for p in volumes.iterdir()] == [f"{_asset_id(comp)}.bin"]
+    # Two explicit solves and one drag (preview, coarse, full): three full maps written,
+    # the newest two kept.
+    assert len(solver_api.calls) == 5
+    assert sorted(p.name for p in volumes.iterdir()) == sorted(f"{a}.bin" for a in finals[1:])
 
 
 def test_previews_stay_in_memory(solver_api, tmp_path):
