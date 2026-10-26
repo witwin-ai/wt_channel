@@ -73,3 +73,25 @@ def test_previews_stay_in_memory(solver_api, tmp_path):
     comp.update_map()
 
     assert _asset_id(comp) and not volumes.exists()
+
+
+def test_a_cuda_error_is_retried_once_in_a_fresh_solver_host(solver_api, monkeypatch):
+    import wt_channel.components.radiomap as radiomap_mod
+
+    monkeypatch.setattr(radiomap_mod, "_CUDA_RETRY_DELAY_S", 0.0)
+    studio, tx, comp = _scene()
+    solver_api.failures.append("CUDA error: out of memory")
+
+    async def main():
+        assert await comp.solve_for("Tx") == "Solve complete"
+        solver_api.failures.append("CUDA error: an illegal memory access was encountered")
+        _move(tx, 12.0)
+        await comp._live.idle()
+
+    asyncio.run(main())
+
+    explicit_failed, explicit, preview_failed, preview = solver_api.calls[:4]
+    assert explicit_failed["scene_sent"] and explicit["scene_sent"]
+    assert preview_failed["grid_shape"] == [64, 64] and preview["grid_shape"] == [64, 64]
+    assert preview["scene_sent"]  # the fresh host has no cached Scene
+    assert comp.live_status.startswith("Done")

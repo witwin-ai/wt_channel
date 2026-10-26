@@ -66,6 +66,16 @@ _SCENE_EVENTS = ("object_updated", "component_updated", "object_added", "object_
 PLANE_AXES = {"XY": (2, 0, 1), "XZ": (1, 0, 2), "YZ": (0, 1, 2)}
 
 
+# A "CUDA error" leaves the solver host's CUDA context broken; the host exits after
+# reporting it (solver_host._exit_after_reply) and the solve is tried once more in a
+# fresh host, after this pause for the old one to exit.
+_CUDA_RETRY_DELAY_S = 1.5
+
+
+def _cuda_error(message: str) -> bool:
+    return "cuda error" in str(message).lower()
+
+
 def watch_scene_radiomaps(scene, **_) -> None:
     """Arm live Tx drag for every RadioMap of a Scene that was just loaded.
 
@@ -267,12 +277,16 @@ class RadioMapComponent(FieldComponent):
             config = self._solver_config(transmitter, self._owner.name)
             config["scene_key"] = scene_key
             self._scene_key = ""
-            run = await asyncio.to_thread(
-                api.solvers.solve,
-                "witwin.channel.radiomap",
-                scene=scene,
-                config=config,
-            )
+            for attempt in range(2):
+                run = await asyncio.to_thread(
+                    api.solvers.solve,
+                    "witwin.channel.radiomap",
+                    scene=scene,
+                    config=config,
+                )
+                if run.status == "succeeded" or attempt or not _cuda_error((run.error or {}).get("message")):
+                    break
+                await asyncio.sleep(_CUDA_RETRY_DELAY_S)
             if run.status != "succeeded":
                 message = (run.error or {}).get("message") or "radiomap solve failed"
                 Notifications.error("Channel", message)
@@ -452,7 +466,8 @@ class RadioMapComponent(FieldComponent):
         if self._below_ground(scene, config["tx_position"]):
             self._set_live_status("Tx is below the ground: move it up to update the radio map")
             return "skipped"
-        for _ in range(2):
+        cuda_retried = False
+        for _ in range(3):
             send_scene = not self._scene_key
             if send_scene:
                 self._scene_key = uuid.uuid4().hex
@@ -469,6 +484,11 @@ class RadioMapComponent(FieldComponent):
             message = (run.error or {}).get("message") or "radiomap solve failed"
             if "scene_cache_miss" in message and not send_scene:
                 self._scene_key = ""  # the solver host restarted: resend the Scene once
+                continue
+            if _cuda_error(message) and not cuda_retried:
+                cuda_retried = True
+                self._scene_key = ""  # the fresh host has no cached Scene
+                await asyncio.sleep(_CUDA_RETRY_DELAY_S)
                 continue
             if run.status == "cancelled":
                 return "cancelled"

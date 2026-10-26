@@ -57,6 +57,7 @@ def host(monkeypatch):
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     solver_host._SCENES.clear()
     monkeypatch.setattr(solver_host, "_LAST_SCENE_KEY", None)
+    monkeypatch.setattr(solver_host, "_exit_after_reply", lambda: None)  # never exit pytest
     return SimpleNamespace(module=solver_host, events=events)
 
 
@@ -131,3 +132,27 @@ def test_a_failed_solve_lets_go_of_its_gpu_tensors(host, monkeypatch):
     assert held[0]() is None  # nothing keeps the failed attempt's locals alive
     assert caught.value.__cause__ is None and caught.value.__context__ is None
     assert host.events.cleared == 1  # and the compiled scenes are dropped
+
+
+def test_a_cuda_error_restarts_the_solver_host(host, monkeypatch):
+    # After "CUDA error: out of memory" on Princeton every later solve in the same
+    # process failed the same way, even 64^2 previews on other maps: the CUDA context
+    # was broken. The host now exits after reporting it; Studio starts a fresh one.
+    restarts = []
+    monkeypatch.setattr(host.module, "_exit_after_reply", lambda: restarts.append(1))
+
+    def broken(scene, comp, *, transmitter, receiver, grid_shape=None):
+        raise RuntimeError("CUDA error: out of memory\nCUDA kernel errors might be asynchronously reported")
+
+    monkeypatch.setattr(host.module.SolveRunner, "run", staticmethod(broken))
+    with pytest.raises(RuntimeError, match="CUDA error"):
+        host.module.solve(_Ctx(), _studio_with_tx(), _config("princeton"))
+    assert restarts == [1]
+
+    def other(scene, comp, *, transmitter, receiver, grid_shape=None):
+        raise ValueError("transmitter 'Tx' is not in the scene")
+
+    monkeypatch.setattr(host.module.SolveRunner, "run", staticmethod(other))
+    with pytest.raises(ValueError):
+        host.module.solve(_Ctx(), _studio_with_tx(), _config("ucsd"))
+    assert restarts == [1]  # other errors keep the host

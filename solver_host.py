@@ -131,11 +131,26 @@ def solve(ctx, scene, config):
         # they hold - are gone: Princeton ran out of memory and the solver host kept all
         # 16 GB, so every later solve (other maps, Monte Carlo retries) failed too.
         _forget_compiled_scenes()
+        if "cuda error" in failure[1].lower():
+            _exit_after_reply()
         raise _plain_error(*failure)
     if heavy:
         _release_torch_cache()
     ctx.progress(1.0, "Channel radiomap solve complete")
     return cache
+
+
+def _exit_after_reply() -> None:
+    """Exit right after the error reply goes out, so Studio starts a fresh host.
+
+    A "CUDA error" (out of memory inside a kernel, illegal access) breaks the process's
+    CUDA context: after one on Princeton every later solve in the same host failed the
+    same way, even 64^2 previews of other maps.
+    """
+    import os
+    import threading
+
+    threading.Timer(0.5, os._exit, args=(3,)).start()
 
 
 def _plain_error(kind, message: str) -> BaseException:
