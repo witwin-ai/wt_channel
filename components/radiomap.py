@@ -66,6 +66,19 @@ _SCENE_EVENTS = ("object_updated", "component_updated", "object_added", "object_
 PLANE_AXES = {"XY": (2, 0, 1), "XZ": (1, 0, 2), "YZ": (0, 1, 2)}
 
 
+def watch_scene_radiomaps(scene, **_) -> None:
+    """Arm live Tx drag for every RadioMap of a Scene that was just loaded.
+
+    A map loaded from disk shows at once (see ``_export_map``); dragging its Tx did
+    nothing until a solve in the current run (Eiffel Tower). Called on
+    ``scene_loaded`` and for the Scenes already open when the plugin activates.
+    """
+    for obj in list(getattr(scene, "objects", {}).values()):
+        comp = obj.get_component("RadioMap")
+        if comp is not None:
+            comp._watch_scene(scene)
+
+
 @component(name="RadioMap", display_name="RadioMap", category=CATEGORY)
 class RadioMapComponent(FieldComponent):
     """A 2D ``Field`` that solves a channel radiomap and shows it as its plane."""
@@ -288,7 +301,9 @@ class RadioMapComponent(FieldComponent):
         self._live_loop = asyncio.get_running_loop()
         if self._live is not None:
             self._live.reset()
-        scene = self._owner.scene
+        self._watch_scene(self._owner.scene)
+
+    def _watch_scene(self, scene) -> None:
         if self._live_scene is scene:
             return
         if self._live_scene is not None:
@@ -303,6 +318,8 @@ class RadioMapComponent(FieldComponent):
         if self._owner is None or self._owner.scene is not scene:
             return
         obj = object if object is not None else (scene.get_object(object_id) if object_id else None)
+        if not self._live_tx_name and obj is not None and obj.get_component(TX_COMPONENT) is not None:
+            self._live_tx_name = self._resolve_transmitter(scene) or ""
         is_tx = obj is not None and obj.name == self._live_tx_name
         if is_tx and (update_type == "transform" or component_name == "Transform"):
             if update_type == "transform":
@@ -314,8 +331,14 @@ class RadioMapComponent(FieldComponent):
         self._scene_key = ""  # any other edit: the solver host's cached scene is stale
 
     def _tx_moved(self) -> None:
-        if not (bool(self.live_update) and self._solver_result_handle) or self._explicit_solving:
+        shows_map = bool(self._solver_result_handle or (self._values.get("volume") or {}).get("assetId"))
+        if not (bool(self.live_update) and shows_map) or self._explicit_solving:
             return
+        if self._live_loop is None:  # no solve in this run yet: a map loaded from disk
+            try:
+                self._live_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return
         if self._live is None:
             self._live = LiveTxScheduler(self._live_preview, self._live_refine, self._live_cancel)
         self._live.settle_s = float(self.live_settle_s)

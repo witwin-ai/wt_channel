@@ -318,5 +318,20 @@ def make_run_radiomap_tool(ctx: Any) -> Tool:
 
 
 def register(ctx: Any) -> None:
-    """contributes.tools hook: register the run_radiomap agent tool."""
+    """contributes.tools hook: register the run_radiomap agent tool.
+
+    Also arms live Tx drag for RadioMaps loaded from disk: on every ``scene_loaded``
+    and for the Scenes already open (the main Scene loads before plugins activate).
+    """
+    from .components.radiomap import watch_scene_radiomaps
+
     ctx.tools.register(make_run_radiomap_tool(ctx))
+    lifecycle = getattr(ctx, "scene_lifecycle", None)
+    if lifecycle is not None:
+        lifecycle.on("scene_loaded", watch_scene_radiomaps)
+    try:
+        scenes = list(getattr(ctx.api.server, "scenes", {}).values())
+    except (RuntimeError, AttributeError):  # api not bound to a server (tests, solver host)
+        scenes = []
+    for scene in scenes:
+        watch_scene_radiomaps(scene)
