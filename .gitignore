@@ -4,3 +4,7 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 .pytest_tmp_wt_channel/
+
+# Python packaging output
+build/
+dist/
