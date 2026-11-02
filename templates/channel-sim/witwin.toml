@@ -1,0 +1,8 @@
+[project]
+id = "00000000-0000-4000-8000-000000000003"
+name = "Channel Sim"
+format_version = "1.0"
+description = "A 3.5 GHz transmitter and receiver over a concrete ground plane."
+main_scene = "main"
+template_id = "channel-sim"
+template_version = "1.0.0"

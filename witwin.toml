@@ -55,3 +55,16 @@ python = "${project:python}"
 cancel = true
 partials = true
 query = ["plot", "ray_batch"]
+
+# A Project template (Studio's template cards). The payload is copied as-is;
+# every file is checked against the content manifest, whose sha256 is pinned
+# here. Rebuild both with studio/scripts/build-template-manifest.mjs.
+[[contributes.templates]]
+id = "channel-sim"
+title = "Channel Sim"
+description = "A 3.5 GHz transmitter and receiver over a concrete ground plane."
+icon = "radio-tower"
+version = "1.0.0"
+dir = "templates/channel-sim"
+manifest = "template.manifest.json"
+sha256 = "253c74d652ed3a962ad2c3225267c0bc8de1fcc117170d22d29e78ee85471641"
