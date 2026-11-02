@@ -18,7 +18,7 @@ if str(PLUGIN_PARENT) not in sys.path:
     sys.path.insert(0, str(PLUGIN_PARENT))
 
 import wt_channel  # noqa: F401  (registers Channel components before Scene.from_dict)
-from witwin_server.features.solvers.sdk import SolverCancelled, query, serve
+from witwin.studio.solver import SolverCancelled, query, serve
 from wt_channel.adapter.path_solve import (
     PathLineBuilder,
     PathSolveRunner,
