@@ -19,7 +19,7 @@ non-isotropic patterns fail loudly instead of silently solving a different anten
 import math
 from typing import Any, Optional, Tuple
 
-from witwin_server import SceneObject
+from witwin_server.api import SceneObject
 
 from .array_spec import ArraySpecMap
 from .common import num, opt_vec3, vec

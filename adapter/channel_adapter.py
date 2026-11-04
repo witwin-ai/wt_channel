@@ -17,8 +17,7 @@ imported street map) become structures with a default ITU concrete material.
 """
 from typing import Any, Dict, List, Optional, Tuple
 
-from witwin_server import Scene, SceneObject
-from witwin_server.features.platform.bridge import StructureMap, TransformMap
+from witwin_server.api import Scene, SceneObject, StructureMap, TransformMap
 
 from .common import num, vec
 from .endpoint_map import RADIOMAP_COMPONENT, RX_COMPONENT, TX_COMPONENT, EndpointMap, endpoint_name

@@ -21,8 +21,7 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
-from witwin_server import SceneObject
-from witwin_server.tools.base import Tool, ToolError, tool
+from witwin_server.api import SceneObject, Tool, ToolError, tool
 
 from .adapter.channel_adapter import PATHSOLVER_COMPONENT, ChannelAdapter
 from .adapter.endpoint_map import RADIOMAP_COMPONENT, RX_COMPONENT, TX_COMPONENT
@@ -97,7 +96,7 @@ _CHANNEL_COMPONENTS = (TX_COMPONENT, RX_COMPONENT, RADIOMAP_COMPONENT, PATHSOLVE
 
 def scene_vertices(scene: Any) -> np.ndarray:
     """World-space vertices of every structure the channel solver would trace."""
-    from witwin_server.features.platform.bridge import StructureMap
+    from witwin_server.api import StructureMap
 
     chunks = []
     for obj in scene.objects.values():
@@ -321,7 +320,7 @@ def register(ctx: Any) -> None:
     """contributes.tools hook: register the run_radiomap agent tool.
 
     Also arms live Tx drag for RadioMaps loaded from disk: on every ``scene_loaded``
-    and for the Scenes already open (the main Scene loads before plugins activate).
+    and for the current Scene (it loads before plugins activate).
     """
     from .components.radiomap import watch_scene_radiomaps
 
@@ -330,8 +329,8 @@ def register(ctx: Any) -> None:
     if lifecycle is not None:
         lifecycle.on("scene_loaded", watch_scene_radiomaps)
     try:
-        scenes = list(getattr(ctx.api.server, "scenes", {}).values())
+        scene = ctx.api.scene
     except (RuntimeError, AttributeError):  # api not bound to a server (tests, solver host)
-        scenes = []
-    for scene in scenes:
+        scene = None
+    if scene is not None:
         watch_scene_radiomaps(scene)

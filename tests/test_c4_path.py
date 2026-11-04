@@ -7,10 +7,6 @@ solve (``test_live_*``) needs CUDA RayD/OptiX and is skipped otherwise.
 import asyncio
 import io
 import json
-import tomllib
-import shutil
-import sys
-import uuid
 import numpy as np
 import pytest
 from witwin.core import Box, Material, Structure
@@ -184,13 +180,12 @@ def test_path_solver_draw_uses_single_anchor_and_ray_batch_spec(monkeypatch):
     No per-path SceneObject; the asset travels via the ray_batch_assets service
     (mocked here so the test doesn't need the live server bound).
     """
-    from witwin_server.core import Scene
-    from witwin_server.api import api
+    from witwin_server.api import Scene, api
     from wt_channel.components.pathsolver import PathSolverComponent
 
     scene = Scene()
     # Host the component on its own SceneObject so _owner.scene resolves.
-    from witwin_server.core import SceneObject as SO
+    from witwin_server.api import SceneObject as SO
     host = SO(name="Path Solver", mesh_type="Empty")
     scene.add_object(host)
     comp = PathSolverComponent()
@@ -256,8 +251,7 @@ def test_path_solver_draw_uses_single_anchor_and_ray_batch_spec(monkeypatch):
 
 def test_path_solver_color_mode_switches_channel(monkeypatch):
     """RB6: color_mode='gain' flips the spec's color_channel + enables additive."""
-    from witwin_server.core import Scene, SceneObject as SO
-    from witwin_server.api import api
+    from witwin_server.api import Scene, SceneObject as SO, api
     from wt_channel.components.pathsolver import PathSolverComponent
 
     scene = Scene()
@@ -313,7 +307,7 @@ def test_path_config_builder():
 def test_path_solver_component_uses_solver_api_for_solve(monkeypatch):
     import wt_channel.adapter.channel_adapter as channel_adapter_mod
     import wt_channel.components.pathsolver as pathsolver_mod
-    from witwin_server.core import Scene, SceneObject as SO
+    from witwin_server.api import Scene, SceneObject as SO
     from wt_channel.components.pathsolver import PathSolverComponent
 
     scene = Scene()
@@ -475,64 +469,44 @@ def test_live_path_solve(adapter, path_ready):
     assert any(line.interaction == "los" for line in lines)
 
 
-def test_live_path_solver_host_solves_and_queries(adapter, path_ready):
+def test_live_path_solver_host_solves_and_queries(adapter, path_ready, solver_child):
     """Exercise the real RFC-012 child process path for path solve + queries."""
     from pathlib import Path
     import witwin.channel as ch
-    from witwin_server.features.runs.store import RunStore
-    from witwin_server.features.solvers.host import SolverHost
-    from witwin_server.features.solvers.scene_ref import make_scene_ref
-    from witwin_server.features.solvers.spec import SolverSpec
+    from witwin_server.api import make_scene_ref
 
-    plugin_root = Path(__file__).resolve().parents[1]
-    manifest = tomllib.loads((plugin_root / "witwin.toml").read_text())
-    item = next(s for s in manifest["contributes"]["solvers"]
-                if s["id"] == "witwin.channel.path")
-    spec = SolverSpec.from_manifest(
-        "witwin.channel",
-        plugin_root,
-        {**item, "runtime": {"python": sys.executable}},
+    process = solver_child("witwin.channel.path")
+    scene = ch.Scene(
+        structures=[Structure(Box(size=(0.3, 6.0, 6.0), position=(3.0, 4.0, 3.0)),
+                              Material.from_itu("concrete"), name="wall")],
+        transmitters=[ch.Transmitter(name="tx", position=(0.0, 0.0, 3.0))],
+        receivers=[ch.Receiver(name="rx", position=(6.0, 0.0, 3.0))],
+        frequency=3.5e9, device="cuda",
     )
-    work_dir = (Path.cwd() / ".pytest_tmp_wt_channel" / f"path-host-{uuid.uuid4().hex}").resolve()
-    work_dir.mkdir(parents=True, exist_ok=True)
-    host = SolverHost(spec, RunStore(work_dir / "runs.db"))
-    try:
-        scene = ch.Scene(
-            structures=[Structure(Box(size=(0.3, 6.0, 6.0), position=(3.0, 4.0, 3.0)),
-                                  Material.from_itu("concrete"), name="wall")],
-            transmitters=[ch.Transmitter(name="tx", position=(0.0, 0.0, 3.0))],
-            receivers=[ch.Receiver(name="rx", position=(6.0, 0.0, 3.0))],
-            frequency=3.5e9, device="cuda",
-        )
-        studio = adapter.to_studio(scene)
-        comp = studio.get_object_by_name("Path Solver").get_component("PathSolver")
-        comp.num_samples = 256
-        comp.max_bounces = 1
-        comp.max_diffraction_order = 0
-        comp.draw_paths = True
+    studio = adapter.to_studio(scene)
+    comp = studio.get_object_by_name("Path Solver").get_component("PathSolver")
+    comp.num_samples = 256
+    comp.max_bounces = 1
+    comp.max_diffraction_order = 0
+    comp.draw_paths = True
 
-        final = host.solve(
-            scene_ref=make_scene_ref(studio),
-            config=comp._solver_config("tx", "rx"),
-        )
+    reply = process.request("solve", {
+        "runId": "path-run",
+        "sceneRef": make_scene_ref(studio),
+        "config": comp._solver_config("tx", "rx"),
+    }, timeout=600)
 
-        assert final.status == "succeeded", final.error
-        handle = final.outputs["resultHandle"]
-        plot = host.query(handle, "plot", {"mode": "cir"}, run_id=final.run_id)
-        assert len(plot["data"]["x"]) >= 1
-        assert len(plot["data"]["y"]) == len(plot["data"]["x"])
+    def query(op, params):
+        return process.request("query", {"runId": "path-run", "resultHandle": reply["resultHandle"],
+                                         "op": op, "params": params}, timeout=120)
 
-        ray = host.query(
-            handle,
-            "ray_batch",
-            {"gain_db_range": [-120.0, -40.0], "gain_colormap": "viridis"},
-            run_id=final.run_id,
-        )
-        ref = ray["data"]["resultRef"]
-        with np.load(io.BytesIO(Path(ref["path"]).read_bytes()), allow_pickle=False) as batch:
-            assert batch["segments"].shape[1:] == (2, 3)
-            assert int(ray["data"]["segmentCount"]) == int(batch["segments"].shape[0])
-            assert batch["segments"].shape[0] >= 1
-    finally:
-        host.shutdown(force=True)
-        shutil.rmtree(work_dir, ignore_errors=True)
+    plot = query("plot", {"mode": "cir"})
+    assert len(plot["data"]["x"]) >= 1
+    assert len(plot["data"]["y"]) == len(plot["data"]["x"])
+
+    ray = query("ray_batch", {"gain_db_range": [-120.0, -40.0], "gain_colormap": "viridis"})
+    ref = ray["data"]["resultRef"]
+    with np.load(io.BytesIO(Path(ref["path"]).read_bytes()), allow_pickle=False) as batch:
+        assert batch["segments"].shape[1:] == (2, 3)
+        assert int(ray["data"]["segmentCount"]) == int(batch["segments"].shape[0])
+        assert batch["segments"].shape[0] >= 1

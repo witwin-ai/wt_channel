@@ -45,7 +45,7 @@ def test_a_radiomap_without_a_map_still_ignores_the_tx(solver_api):
     assert solver_api.calls == []
 
 
-def test_the_plugin_watches_loaded_and_already_open_scenes():
+def test_the_plugin_watches_loaded_scenes_and_the_current_one():
     from wt_channel import agent_tools
     from wt_channel.components.radiomap import watch_scene_radiomaps
 
@@ -54,7 +54,7 @@ def test_the_plugin_watches_loaded_and_already_open_scenes():
     ctx = SimpleNamespace(
         tools=SimpleNamespace(register=lambda tool: None),
         scene_lifecycle=SimpleNamespace(on=lambda event, fn: subscribed.append((event, fn))),
-        api=SimpleNamespace(server=SimpleNamespace(scenes={"main": studio})),
+        api=SimpleNamespace(scene=studio),
     )
 
     agent_tools.register(ctx)

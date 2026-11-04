@@ -15,8 +15,7 @@ Two authoring modes (channel keeps presets channel-only):
 from typing import Any, Optional
 
 import numpy as np
-from witwin_server import SceneObject
-from witwin_server.features.platform.bridge import MaterialMap
+from witwin_server.api import SceneObject, MaterialMap
 
 from .common import num
 from .itu import ITU_MATERIALS, itu_material, normalize_itu_name

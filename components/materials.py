@@ -11,13 +11,7 @@ ITU formula (``material_presets.py``): ``eps_r = a*f_GHz^b``, ``sigma_e = c*f_GH
 ``mu_r = 1``; each preset is only defined over a frequency band (the platform raises
 outside it).
 """
-from witwin_server.core.components import (
-    Component,
-    bool_field,
-    component,
-    float_field,
-    string_field,
-)
+from witwin_server.api import Component, bool_field, component, float_field, string_field
 
 from .category import CATEGORY
 

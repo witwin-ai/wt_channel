@@ -13,12 +13,12 @@ import torch
 
 
 def _studio():
-    from witwin_server import Scene as StudioScene
+    from witwin_server.api import Scene as StudioScene
     return StudioScene()
 
 
 def _quad_mesh(name="ground", *, position=(0.0, 0.0, 0.0), scale=(1.0, 1.0, 1.0)):
-    from witwin_server import SceneObject
+    from witwin_server.api import SceneObject
 
     obj = SceneObject(name=name, mesh_type="Custom")
     vertices = np.array([[-1, 0, -1], [1, 0, -1], [1, 0, 1], [-1, 0, 1]], dtype=np.float32)
@@ -31,7 +31,7 @@ def _quad_mesh(name="ground", *, position=(0.0, 0.0, 0.0), scale=(1.0, 1.0, 1.0)
 
 
 def _add_tx(studio, name="tx", position=(0.0, 10.0, 0.0)):
-    from witwin_server.core import SceneObject
+    from witwin_server.api import SceneObject
     from wt_channel.components.endpoints import TxComponent
 
     obj = SceneObject(name=name, mesh_type="Empty")
@@ -42,7 +42,7 @@ def _add_tx(studio, name="tx", position=(0.0, 10.0, 0.0)):
 
 
 def _add_radiomap(studio, name="rm"):
-    from witwin_server.core import SceneObject
+    from witwin_server.api import SceneObject
     from wt_channel.components.radiomap import RadioMapComponent
 
     obj = SceneObject(name=name, mesh_type="Empty")
@@ -195,7 +195,7 @@ def test_core_world_roundtrips_through_studio(adapter):
 
 
 def _tag_rf_transparent(obj):
-    from witwin_server.core.components.structure_meta import StructureMetaComponent
+    from witwin_server.api import StructureMetaComponent
 
     meta = obj.add_component(StructureMetaComponent())
     meta.tags = ["rf:transparent"]

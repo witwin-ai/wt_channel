@@ -62,7 +62,7 @@ def test_plan_without_geometry_raises():
 
 
 def _studio_with_map():
-    from witwin_server import Scene as StudioScene, SceneObject
+    from witwin_server.api import Scene as StudioScene, SceneObject
 
     studio = StudioScene()
     terrain = SceneObject(name="Map Terrain", mesh_type="Custom")
@@ -217,8 +217,7 @@ def test_tool_solves_and_reports_statistics(monkeypatch):
 
 
 def test_tool_without_geometry_asks_for_a_map(monkeypatch):
-    from witwin_server import Scene as StudioScene
-    from witwin_server.tools.base import ToolError
+    from witwin_server.api import Scene as StudioScene, ToolError
 
     _fake_solver(monkeypatch, np.zeros((1, 1), np.float32))
     with pytest.raises(ToolError, match="import_map"):
@@ -227,7 +226,7 @@ def test_tool_without_geometry_asks_for_a_map(monkeypatch):
 
 def test_tool_reports_solver_failure(monkeypatch):
     import wt_channel.components.radiomap as radiomap_mod
-    from witwin_server.tools.base import ToolError
+    from witwin_server.api import ToolError
 
     class FailedRun:
         status = "failed"
@@ -287,7 +286,7 @@ def test_tool_falls_back_to_monte_carlo_when_deterministic_fails(monkeypatch):
 
 
 def test_tool_explicit_monte_carlo_does_not_fall_back(monkeypatch):
-    from witwin_server.tools.base import ToolError
+    from witwin_server.api import ToolError
 
     calls = _scripted_solver(monkeypatch, {"montecarlo": "out of memory"})
 
@@ -336,7 +335,7 @@ def test_tool_solves_in_the_scene_named_by_scene_id(monkeypatch):
 
 
 def test_tool_refuses_a_scene_that_is_not_open(monkeypatch):
-    from witwin_server.tools.base import ToolError
+    from witwin_server.api import ToolError
     from wt_channel import agent_tools
 
     _fake_solver(monkeypatch, np.zeros((1, 1), np.float32))

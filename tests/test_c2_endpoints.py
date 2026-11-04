@@ -12,12 +12,12 @@ import pytest
 
 
 def _studio():
-    from witwin_server import Scene as StudioScene
+    from witwin_server.api import Scene as StudioScene
     return StudioScene()
 
 
 def _tx(name="tx", position=(1.0, 2.0, 3.0)):
-    from witwin_server.core import SceneObject
+    from witwin_server.api import SceneObject
     from wt_channel.components.endpoints import TxComponent
 
     obj = SceneObject(name=name, mesh_type="Empty")
@@ -27,7 +27,7 @@ def _tx(name="tx", position=(1.0, 2.0, 3.0)):
 
 
 def _radiomap(name="rm", position=(5.0, 1.5, -3.0)):
-    from witwin_server.core import SceneObject
+    from witwin_server.api import SceneObject
     from wt_channel.components.radiomap import RadioMapComponent
 
     obj = SceneObject(name=name, mesh_type="Empty")
@@ -62,7 +62,7 @@ def test_receivers_default_to_studio_vertical_polarization():
     # Studio is Y up. witwin.channel defaults an unpolarized endpoint to +Z, which in
     # Studio is horizontal: a vertical Tx then met cross-polarized receivers and the
     # deterministic radio map lost ~31 dB of LoS against Monte Carlo (UCSD, median).
-    from witwin_server.core import SceneObject
+    from witwin_server.api import SceneObject
     from wt_channel.adapter.endpoint_map import EndpointMap
     from wt_channel.components.endpoints import RxComponent
 
@@ -75,7 +75,7 @@ def test_receivers_default_to_studio_vertical_polarization():
 
 
 def test_receiver_explicit_polarization_wins():
-    from witwin_server.core import SceneObject
+    from witwin_server.api import SceneObject
     from wt_channel.adapter.endpoint_map import EndpointMap
     from wt_channel.components.endpoints import RxComponent
 
@@ -88,7 +88,7 @@ def test_receiver_explicit_polarization_wins():
 
 
 def test_receiver_optional_fields_default_none():
-    from witwin_server.core import SceneObject
+    from witwin_server.api import SceneObject
     from wt_channel.adapter.endpoint_map import EndpointMap
     from wt_channel.components.endpoints import RxComponent
 

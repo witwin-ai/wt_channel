@@ -9,9 +9,6 @@ as passing.
 import asyncio
 import json
 import tomllib
-import shutil
-import sys
-import uuid
 from types import SimpleNamespace
 
 import numpy as np
@@ -162,9 +159,9 @@ def test_solver_host_cache_keeps_every_metric():
 # --- library prefabs (CPU) -----------------------------------------------------
 
 def test_library_items_registered(wtc):
-    from witwin_server.features.library.service import _pending_items
+    from witwin_server.api import testing
 
-    names = set(_pending_items)
+    names = testing.library_item_ids()
     assert {"channel_demo", "channel_tx", "channel_rx", "channel_radiomap",
             "channel_pathsolver"} <= names
 
@@ -188,7 +185,7 @@ def test_platform_compat_restores_getargspec(monkeypatch):
 
 def test_demo_prefab_does_not_import_channel_platform(monkeypatch, wtc):
     import builtins
-    from witwin_server import Scene as StudioScene
+    from witwin_server.api import Scene as StudioScene
     from wt_channel import library_items
 
     original_import = builtins.__import__
@@ -209,7 +206,7 @@ def test_demo_prefab_does_not_import_channel_platform(monkeypatch, wtc):
 
 
 def test_demo_prefab_builds_core_world(adapter, wtc):
-    from witwin_server import Scene as StudioScene
+    from witwin_server.api import Scene as StudioScene
     from wt_channel import library_items
 
     studio = StudioScene()
@@ -327,7 +324,7 @@ def test_radiomap_solver_config_is_json_serializable():
 def test_radiomap_component_uses_solver_api_for_solve(monkeypatch):
     import wt_channel.adapter.channel_adapter as channel_adapter_mod
     import wt_channel.components.radiomap as radiomap_mod
-    from witwin_server.core import Scene, SceneObject as SO
+    from witwin_server.api import Scene, SceneObject as SO
     from wt_channel.components.radiomap import RadioMapComponent
 
     studio = Scene()
@@ -403,7 +400,7 @@ def test_radiomap_component_uses_solver_api_for_solve(monkeypatch):
 
 def _live_studio():
     """20 m concrete ground (Y up), Tx near the +X/-Z corner, 16x16 map at 1.5 m."""
-    from witwin_server import Scene as StudioScene, SceneObject
+    from witwin_server.api import Scene as StudioScene, SceneObject
     from wt_channel.components.endpoints import TxComponent
     from wt_channel.components.radiomap import RadioMapComponent
 
@@ -465,49 +462,30 @@ def test_live_deterministic_radiomap_is_oriented(det_ready):
     _assert_map_oriented(_run_live("deterministic"))
 
 
-def test_live_radiomap_solver_host_solves_and_queries(mc_ready):
+def test_live_radiomap_solver_host_solves_and_queries(mc_ready, solver_child):
     """Exercise the real RFC-012 child process path for radiomap solve + query."""
-    from pathlib import Path
-    from witwin_server.features.runs.store import RunStore
-    from witwin_server.features.solvers.host import SolverHost
-    from witwin_server.features.solvers.scene_ref import make_scene_ref
-    from witwin_server.features.solvers.spec import SolverSpec
+    from witwin_server.api import make_scene_ref
 
-    plugin_root = Path(__file__).resolve().parents[1]
-    manifest = tomllib.loads((plugin_root / "witwin.toml").read_text())
-    item = next(s for s in manifest["contributes"]["solvers"]
-                if s["id"] == "witwin.channel.radiomap")
-    spec = SolverSpec.from_manifest(
-        "witwin.channel",
-        plugin_root,
-        {**item, "runtime": {"python": sys.executable}},
-    )
-    work_dir = (Path.cwd() / ".pytest_tmp_wt_channel" / f"radiomap-host-{uuid.uuid4().hex}").resolve()
-    work_dir.mkdir(parents=True, exist_ok=True)
-    host = SolverHost(spec, RunStore(work_dir / "runs.db"))
-    try:
-        studio, comp = _live_studio()
-        comp.solver = "montecarlo"
-        comp.mc_samples_per_tx = 2048
-        comp.mc_max_bounces = 1
-        comp.mc_max_diffraction_order = 0
+    process = solver_child("witwin.channel.radiomap")
+    studio, comp = _live_studio()
+    comp.solver = "montecarlo"
+    comp.mc_samples_per_tx = 2048
+    comp.mc_max_bounces = 1
+    comp.mc_max_diffraction_order = 0
 
-        final = host.solve(
-            scene_ref=make_scene_ref(studio),
-            config=comp._solver_config("tx", "rmap"),
-        )
+    reply = process.request("solve", {
+        "runId": "radiomap-run",
+        "sceneRef": make_scene_ref(studio),
+        "config": comp._solver_config("tx", "rmap"),
+    }, timeout=600)
 
-        assert final.status == "succeeded", final.error
-        handle = final.outputs["resultHandle"]
-        queried = host.query(
-            handle,
-            "extract_map",
-            {"metric": "path_gain", "tx_index": 0, "log_scale": True},
-            run_id=final.run_id,
-        )
-        data = np.asarray(queried["data"]["data"], dtype=np.float32)
-        assert data.shape == (16, 16)
-        assert np.isfinite(data).any()
-    finally:
-        host.shutdown(force=True)
-        shutil.rmtree(work_dir, ignore_errors=True)
+    handle = reply["resultHandle"]
+    queried = process.request("query", {
+        "runId": "radiomap-run",
+        "resultHandle": handle,
+        "op": "extract_map",
+        "params": {"metric": "path_gain", "tx_index": 0, "log_scale": True},
+    }, timeout=120)
+    data = np.asarray(queried["data"]["data"], dtype=np.float32)
+    assert data.shape == (16, 16)
+    assert np.isfinite(data).any()

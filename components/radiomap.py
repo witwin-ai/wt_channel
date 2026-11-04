@@ -18,9 +18,9 @@ import uuid
 
 import numpy as np
 
-from witwin_server import Notifications
-from witwin_server.api import api
-from witwin_server.core.components import (
+from witwin_server.api import (
+    Notifications,
+    api,
     bool_field,
     button,
     component,
@@ -31,10 +31,11 @@ from witwin_server.core.components import (
     string_field,
     tab_group,
     vector3_field,
+    FREQUENCY_UNITS,
+    FieldComponent,
+    VOLUME_FLOAT32_FORMAT,
+    FieldViz,
 )
-from witwin_server.core.components.field_region import FREQUENCY_UNITS, FieldComponent
-from witwin_server.features.assets.binary.refs import VOLUME_FLOAT32_FORMAT
-from witwin_server.features.platform.bridge import FieldViz
 
 from ..adapter.common import json_value
 from ..adapter.live import LiveTxScheduler

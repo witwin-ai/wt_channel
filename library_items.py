@@ -13,7 +13,7 @@ Each prefab carries components straight from the registry (no platform ``Scene``
 built, so dropping never needs CUDA). The factory adds any extra objects to the drop
 scene and returns the primary one.
 """
-from witwin_server import Library, SceneObject
+from witwin_server.api import Library, SceneObject
 
 _CATEGORY = "channel"
 
@@ -53,7 +53,7 @@ def _pathsolver_object(name):
 
 
 def _ground_object():
-    from witwin_server.core.components.platform_geometry import PlatformGeometryComponent
+    from witwin_server.api import PlatformGeometryComponent
 
     from .components.materials import MaterialPresetComponent
 

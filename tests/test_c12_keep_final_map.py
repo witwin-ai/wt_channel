@@ -13,7 +13,7 @@ from test_c9_live_radiomap import _move, _scene, solver_api  # noqa: F401  (fixt
 
 
 def _with_assets(studio, tmp_path):
-    from witwin_server.features.assets.binary.service import BinaryAssetService
+    from witwin_server.api import BinaryAssetService
 
     volumes = tmp_path / "runtime" / "volumes"
     persistence = SimpleNamespace(runtime_volumes_dir=volumes, volume_candidate_dirs=lambda: [volumes])
@@ -27,7 +27,7 @@ def _asset_id(comp):
 
 
 def test_a_solved_map_is_found_again_after_a_restart(solver_api, tmp_path):
-    from witwin_server.features.assets.binary.service import BinaryAssetService
+    from witwin_server.api import BinaryAssetService
 
     studio, tx, comp = _scene()
     _, persistence, volumes = _with_assets(studio, tmp_path)

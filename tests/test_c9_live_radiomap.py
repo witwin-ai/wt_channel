@@ -48,7 +48,7 @@ def solver_api(monkeypatch):
 
 
 def _scene():
-    from witwin_server import Scene as StudioScene, SceneObject
+    from witwin_server.api import Scene as StudioScene, SceneObject
     from wt_channel.components.endpoints import TxComponent
     from wt_channel.components.radiomap import RadioMapComponent
 
@@ -184,7 +184,7 @@ def test_the_tx_asks_the_viewport_to_stream_its_drag():
 def test_radio_map_refreshes_never_toast(solver_api, monkeypatch):
     # Each map refresh publishes the plane volume and the core toasted "Volume Cached"
     # for every publish; the user asked for no progress / done toasts at all.
-    from witwin_server.core.components.scalar_grid_resource import ScalarGridResourcePublisher
+    from witwin_server.api import ScalarGridResourcePublisher
     import wt_channel.components.radiomap as radiomap_mod
 
     toasts = []

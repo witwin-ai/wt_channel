@@ -15,6 +15,7 @@ solve suites need CUDA RayD and are gated per-solver by the ``det_ready`` /
 *that* one can't run here).
 """
 import importlib
+import importlib.util
 import inspect
 import sys
 from collections import namedtuple
@@ -43,7 +44,8 @@ if str(PLUGINS_DIR) not in sys.path:
 PKG = "wt_channel"
 
 try:
-    import witwin_server  # noqa: F401
+    if importlib.util.find_spec("witwin_server") is None:
+        raise ImportError("witwin_server")
     import witwin.channel  # noqa: F401
     _DEPS_OK = True
 except ImportError:
@@ -138,3 +140,32 @@ def path_ready(cuda):
     except Exception as exc:  # noqa: BLE001 - test gate: needs-user-verification if it can't run
         pytest.skip(f"path solver unavailable in this environment: {exc}")
     return True
+
+
+@pytest.fixture
+def solver_child(tmp_path):
+    """Start one of this Plugin's solver children, as the ProjectServer does.
+
+    ``solver_child("witwin.channel.radiomap")`` returns a started
+    ``witwin.studio.solver.SolverProcess`` on this interpreter, with a scratch
+    Project under ``tmp_path``; it is shut down after the test.
+    """
+    import tomllib
+    from witwin.studio.solver import SolverProcess, SolverSpec
+
+    plugin_root = PLUGINS_DIR / PKG
+    manifest = tomllib.loads((plugin_root / "witwin.toml").read_text(encoding="utf-8"))
+    processes = []
+
+    def start(solver_id):
+        item = next(s for s in manifest["contributes"]["solvers"] if s["id"] == solver_id)
+        spec = SolverSpec.from_manifest(manifest["id"], plugin_root,
+                                        {**item, "runtime": {"python": sys.executable}})
+        process = SolverProcess(spec, tmp_path / "project")
+        processes.append(process)
+        process.start()
+        return process
+
+    yield start
+    for process in processes:
+        process.close()

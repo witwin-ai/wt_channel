@@ -4,24 +4,24 @@ Importing this package (eager: no ``activationEvents``):
   1. registers the four core channel components — ``Tx`` / ``Rx`` / ``RadioMap`` /
      ``PathSolver`` (plus the ``MaterialPreset`` companion) — via their ``@component``
      decorators, and
-  2. registers :class:`ChannelAdapter` under the ``"channel"`` domain on the core
-     :class:`PlatformSceneHandler` so ``load_platform_scene`` /
+  2. registers :class:`ChannelAdapter` under the ``"channel"`` domain with
+     ``register_platform_adapter`` so ``load_platform_scene`` /
      ``export_platform_scene`` dispatch channel scenes here.
 
 No ``witwin.channel`` import happens at module load: the adapter maps lazy-import
 it inside their methods, so the plugin still registers its (schema-only) components
 on a machine without the channel solver (drjit / CUDA RayD) installed. The shared
-base layer (``witwin_server.features.platform.bridge`` + the unified ``Material``
-component) is in core and frozen; this plugin only reads/writes it.
+base layer (the platform-bridge maps in ``witwin_server.api`` + the unified
+``Material`` component) is in core and frozen; this plugin only reads/writes it.
 """
 from ._compat import apply_platform_compat
 
 apply_platform_compat()
 
-from witwin_server.features.platform.scene_handlers import PlatformSceneHandler
+from witwin_server.api import register_platform_adapter
 
 from . import components  # noqa: F401  (side-effect: registers channel components)
 from . import library_items  # noqa: F401  (side-effect: registers Channel library prefabs)
 from .adapter import ChannelAdapter
 
-PlatformSceneHandler.register_adapter("channel", ChannelAdapter())
+register_platform_adapter("channel", ChannelAdapter())

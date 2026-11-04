@@ -19,7 +19,7 @@ class _Ctx:
 
 
 def _studio_with_tx():
-    from witwin_server import Scene as StudioScene, SceneObject
+    from witwin_server.api import Scene as StudioScene, SceneObject
     from wt_channel.components.endpoints import TxComponent
 
     studio = StudioScene()

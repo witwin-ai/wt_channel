@@ -16,7 +16,7 @@ endpoint controls its own field ordering; the component metaclass collects field
 ``cls.__dict__`` only, so a plain mixin would be dropped. ``adapter.array_spec`` reads
 these identically-named fields from either component.
 """
-from witwin_server.core.components import (
+from witwin_server.api import (
     Component,
     GizmoContext,
     bool_field,
