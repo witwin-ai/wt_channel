@@ -1,4 +1,4 @@
-format = 2
+format = 3
 id = "main"
 role = "main"
 
@@ -8,7 +8,7 @@ name = "Channel Ground"
 type = "builtin.mesh"
 transform = {pos = [0.0, 0.0, 0.0], rot = [0.0, 0.0, 0.0, 1.0], eul = [0.0, 0.0, 0.0], scl = [20.0, 0.20000000298023224, 20.0]}
 components = [
-    {type = "Material", color = "#7f7f7fff", metalness = 0.5, roughness = 0.5, normal_strength = 1.0, occlusion_strength = 1.0, emissive_color = "#000000ff", emissive_intensity = 0.0, alpha = 1.0, alpha_mode = "opaque", alpha_cutoff = 0.5, double_sided = false, material_name = "Custom", model = "scalar", eps_r = [10.0, 0.0], mu_r = 1.0, sigma_e = 0.0, debye_poles = [], drude_poles = [], lorentz_poles = [], mu_debye_poles = [], mu_drude_poles = [], mu_lorentz_poles = [], epsilon_tensor = [1.0, 1.0, 1.0], mu_tensor = [1.0, 1.0, 1.0], sigma_e_tensor = [0.0, 0.0, 0.0], kerr_chi3 = 0.0},
+    {type = "Material", color = "#8f8a82ff", metalness = 0.0, roughness = 0.9, normal_strength = 1.0, occlusion_strength = 1.0, emissive_color = "#000000ff", emissive_intensity = 0.0, alpha = 1.0, alpha_mode = "opaque", alpha_cutoff = 0.5, double_sided = false, material_name = "Custom", model = "scalar", eps_r = [10.0, 0.0], mu_r = 1.0, sigma_e = 0.0, debye_poles = [], drude_poles = [], lorentz_poles = [], mu_debye_poles = [], mu_drude_poles = [], mu_lorentz_poles = [], epsilon_tensor = [1.0, 1.0, 1.0], mu_tensor = [1.0, 1.0, 1.0], sigma_e_tensor = [0.0, 0.0, 0.0], kerr_chi3 = 0.0},
     {type = "Mesh", vertices = {is_array = true,shape = [8, 3],base_type = "vector3"}, mesh_type = "Cube"},
     {type = "PlatformGeometry", kind = "box", size = [20.0, 0.20000000298023224, 20.0], outer_size = [1.0, 1.0, 1.0], inner_size = [0.800000011920929, 0.800000011920929, 0.800000011920929], radius = 1.0, radii = [1.0, 1.0, 1.0], height = 1.0, base_size = 1.0, num_sides = 6.0, major_radius = 1.0, minor_radius = 0.25, axis = "z", source_path = "", gender = "male", model_root = "", pose = [], shape = []},
     {type = "MaterialPreset", preset = "concrete", use_frequency_override = false, frequency_override = 3500000000.0},
@@ -39,3 +39,39 @@ id = "radiomap"
 name = "RadioMap"
 type = "builtin.group"
 components = [{type = "RadioMap", dimension = "2D", render_mode = "Slices", plane = "XZ", min_bound = [-10.0, 0.0, -10.0], max_bound = [10.0, 0.0, 10.0], resolution = [256.0, 1.0, 256.0], frequency_dependent_resolution = false, frequency = 3500000000.0, cell_size_lambda = "1位", colormap = "inferno", display_range = [0.0, 1.0], log_colormap = false, plane_axis = "XZ", plane_position = 0.5, plane_opacity = 1.0, show_grid = false, opacity_scale = 1.0, density_scale = 1.0, ray_steps = 128.0, cache_in_memory = true, sdf_technique = "sdf", iso_value = 0.0, enable_lighting = true, sdf_ray_steps = 128.0, sdf_cache_in_memory = true, vector_arrow_density = 16.0, vector_arrow_scale = 1.0, vector_arrow_thickness = 1.0, vector_normalize_arrows = false, vector_field_id = "", renderer_debug = false, grid_mode = "Resolution", points_per_wavelength = 4.0, device = "cuda", use_noise_power = false, noise_power = 9.9999998245167e-14, solver = "montecarlo", live_update = true, live_preview = "deterministic", live_preview_resolution = 64.0, live_preview_bounces = 1.0, live_preview_samples = 262144.0, live_settle_s = 1.5, live_refine_coarse = 128.0, live_status = "", metric = "path_gain", tx_index = 0.0, log_scale = true, send_to_results = false, det_metric = "path_gain", det_num_samples = 10000.0, det_max_bounces = 2.0, det_max_diffraction_order = 1.0, det_quadrature_mode = "center", det_samples_per_cell = 4.0, det_shadow_boundary_correction = false, det_synthetic_array = true, det_resolution_wavelength = 0.125, det_solver_mode = "accuracy", det_memory_profile = "default", det_reflection_field_backend = "native", mc_num_samples = 10000.0, mc_max_bounces = 2.0, mc_max_diffraction_order = 1.0, mc_synthetic_array = true, mc_integrator = "basic", mc_samples_per_tx = 65536.0, mc_seed = 0.0, mc_bdpt_diffraction_sampling = "sobol", mc_accumulation_backend = "auto", mc_use_rr_depth = false, mc_rr_depth = 0.0, mc_use_rr_prob = false, mc_rr_prob = 0.949999988079071, mc_use_stop_threshold = false, mc_stop_threshold = 0.0, mc_use_filtering = false, mc_filter_method = "gaussian", mc_filter_radius = 1.0, mc_filter_sigma = 1.0, mc_filter_blend = 1.0, mc_resolution_wavelength = 0.125, mc_solver_mode = "accuracy", mc_memory_profile = "default", mc_reflection_field_backend = "native", ep_vertical_ratio = 0.699999988079071, ep_edge_selection_mode = "all_edges", ep_edge_diffraction = "on"}]
+
+[[entity]]
+id = "building_north"
+name = "Building North"
+type = "builtin.mesh"
+transform = {pos = [1.5, 3.1, -4.5], rot = [0.0, 0.0, 0.0, 1.0], eul = [0.0, 0.0, 0.0], scl = [6.0, 6.0, 3.0]}
+components = [
+    {type = "Material", color = "#cfcac2ff", metalness = 0.0, roughness = 0.8, normal_strength = 1.0, occlusion_strength = 1.0, emissive_color = "#000000ff", emissive_intensity = 0.0, alpha = 1.0, alpha_mode = "opaque", alpha_cutoff = 0.5, double_sided = false, material_name = "Custom", model = "scalar", eps_r = [10.0, 0.0], mu_r = 1.0, sigma_e = 0.0, debye_poles = [], drude_poles = [], lorentz_poles = [], mu_debye_poles = [], mu_drude_poles = [], mu_lorentz_poles = [], epsilon_tensor = [1.0, 1.0, 1.0], mu_tensor = [1.0, 1.0, 1.0], sigma_e_tensor = [0.0, 0.0, 0.0], kerr_chi3 = 0.0},
+    {type = "Mesh", vertices = {is_array = true,shape = [8, 3],base_type = "vector3"}, mesh_type = "Cube"},
+    {type = "PlatformGeometry", kind = "box", size = [6.0, 6.0, 3.0], outer_size = [1.0, 1.0, 1.0], inner_size = [0.800000011920929, 0.800000011920929, 0.800000011920929], radius = 1.0, radii = [1.0, 1.0, 1.0], height = 1.0, base_size = 1.0, num_sides = 6.0, major_radius = 1.0, minor_radius = 0.25, axis = "z", source_path = "", gender = "male", model_root = "", pose = [], shape = []},
+    {type = "MaterialPreset", preset = "concrete", use_frequency_override = false, frequency_override = 3500000000.0},
+]
+
+[[entity]]
+id = "building_south"
+name = "Building South"
+type = "builtin.mesh"
+transform = {pos = [2.0, 2.1, 5.0], rot = [0.0, 0.0, 0.0, 1.0], eul = [0.0, 0.0, 0.0], scl = [4.0, 4.0, 3.5]}
+components = [
+    {type = "Material", color = "#b2695aff", metalness = 0.0, roughness = 0.8, normal_strength = 1.0, occlusion_strength = 1.0, emissive_color = "#000000ff", emissive_intensity = 0.0, alpha = 1.0, alpha_mode = "opaque", alpha_cutoff = 0.5, double_sided = false, material_name = "Custom", model = "scalar", eps_r = [10.0, 0.0], mu_r = 1.0, sigma_e = 0.0, debye_poles = [], drude_poles = [], lorentz_poles = [], mu_debye_poles = [], mu_drude_poles = [], mu_lorentz_poles = [], epsilon_tensor = [1.0, 1.0, 1.0], mu_tensor = [1.0, 1.0, 1.0], sigma_e_tensor = [0.0, 0.0, 0.0], kerr_chi3 = 0.0},
+    {type = "Mesh", vertices = {is_array = true,shape = [8, 3],base_type = "vector3"}, mesh_type = "Cube"},
+    {type = "PlatformGeometry", kind = "box", size = [4.0, 4.0, 3.5], outer_size = [1.0, 1.0, 1.0], inner_size = [0.800000011920929, 0.800000011920929, 0.800000011920929], radius = 1.0, radii = [1.0, 1.0, 1.0], height = 1.0, base_size = 1.0, num_sides = 6.0, major_radius = 1.0, minor_radius = 0.25, axis = "z", source_path = "", gender = "male", model_root = "", pose = [], shape = []},
+    {type = "MaterialPreset", preset = "brick", use_frequency_override = false, frequency_override = 3500000000.0},
+]
+
+[[entity]]
+id = "building_east"
+name = "Building East"
+type = "builtin.mesh"
+transform = {pos = [6.5, 4.1, -7.0], rot = [0.0, 0.0, 0.0, 1.0], eul = [0.0, 0.0, 0.0], scl = [3.0, 8.0, 3.0]}
+components = [
+    {type = "Material", color = "#d9d4ccff", metalness = 0.0, roughness = 0.8, normal_strength = 1.0, occlusion_strength = 1.0, emissive_color = "#000000ff", emissive_intensity = 0.0, alpha = 1.0, alpha_mode = "opaque", alpha_cutoff = 0.5, double_sided = false, material_name = "Custom", model = "scalar", eps_r = [10.0, 0.0], mu_r = 1.0, sigma_e = 0.0, debye_poles = [], drude_poles = [], lorentz_poles = [], mu_debye_poles = [], mu_drude_poles = [], mu_lorentz_poles = [], epsilon_tensor = [1.0, 1.0, 1.0], mu_tensor = [1.0, 1.0, 1.0], sigma_e_tensor = [0.0, 0.0, 0.0], kerr_chi3 = 0.0},
+    {type = "Mesh", vertices = {is_array = true,shape = [8, 3],base_type = "vector3"}, mesh_type = "Cube"},
+    {type = "PlatformGeometry", kind = "box", size = [3.0, 8.0, 3.0], outer_size = [1.0, 1.0, 1.0], inner_size = [0.800000011920929, 0.800000011920929, 0.800000011920929], radius = 1.0, radii = [1.0, 1.0, 1.0], height = 1.0, base_size = 1.0, num_sides = 6.0, major_radius = 1.0, minor_radius = 0.25, axis = "z", source_path = "", gender = "male", model_root = "", pose = [], shape = []},
+    {type = "MaterialPreset", preset = "concrete", use_frequency_override = false, frequency_override = 3500000000.0},
+]

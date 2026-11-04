@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "templateId": "channel-sim",
-  "templateVersion": "1.0.0",
+  "templateVersion": "1.1.0",
   "projectFormatVersion": "1.0",
   "minProtocol": 1,
-  "totalBytes": 11981,
-  "treeSha256": "71cabddbbcb304aaed4645095e609897a3b91304abc7bed37c6d394ad4786e35",
+  "totalBytes": 16386,
+  "treeSha256": "b5310dee7931568bf485d79c33e13665a3b1d49cace8d44282e3a58881d6540a",
   "recommendedPlugins": [
     "witwin.channel"
   ],
@@ -17,8 +17,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 1841,
-      "sha256": "4272281e9d8ddfc98c7029519772decdd83220488da464f4388a609634abb4e3"
+      "bytes": 2018,
+      "sha256": "09e50a3a76928cc6ebdfd9cfa1ac8869632965bf036536dc171f897168722e6e"
     },
     {
       "path": "pyproject.toml",
@@ -27,8 +27,8 @@
     },
     {
       "path": "scenes/main.wtscene",
-      "bytes": 5810,
-      "sha256": "4d770ace130abfddff26be0c8a42261966606f24178bbbfa1c791fb89b390d10"
+      "bytes": 10043,
+      "sha256": "9e51e942348561f984f32dfa1e0b991c72b943e70535c2e78effbeed4ca1c689"
     },
     {
       "path": "scripts/prepare_channel.py",
@@ -42,8 +42,8 @@
     },
     {
       "path": "witwin.toml",
-      "bytes": 254,
-      "sha256": "05020d1d2c08cf498cecdc6c37a7eb19a166f04aa45c16684a9f96ce565522f1"
+      "bytes": 249,
+      "sha256": "066b6cb437b3d070a84f290c1ec5948884af438942a225f34557133542cd2d9a"
     }
   ]
 }

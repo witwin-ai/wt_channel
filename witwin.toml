@@ -62,9 +62,9 @@ query = ["plot", "ray_batch"]
 [[contributes.templates]]
 id = "channel-sim"
 title = "Channel Sim"
-description = "A 3.5 GHz transmitter and receiver over a concrete ground plane."
+description = "A 3.5 GHz transmitter and receiver between three buildings."
 icon = "radio-tower"
-version = "1.0.0"
+version = "1.1.0"
 dir = "templates/channel-sim"
 manifest = "template.manifest.json"
-sha256 = "253c74d652ed3a962ad2c3225267c0bc8de1fcc117170d22d29e78ee85471641"
+sha256 = "88ac59be6783cd0a283af237717c3c8a6e96cb10e693899a04c5a79df8c579c9"
