@@ -94,6 +94,18 @@ _CHANNEL_COMPONENTS = (TX_COMPONENT, RX_COMPONENT, RADIOMAP_COMPONENT, PATHSOLVE
 
 # --- planning (pure) -------------------------------------------------------------
 
+def _world_vertices(geometry: Any) -> Any:
+    """A geometry's world-space vertices as a tensor.
+
+    A Mesh has ``world_vertices``. A primitive has none; since witwin 0.4 its
+    ``to_mesh()`` returns ``(vertices, faces)`` already in world space.
+    """
+    if hasattr(geometry, "world_vertices"):
+        return geometry.world_vertices
+    vertices, _faces = geometry.to_mesh()
+    return vertices
+
+
 def scene_vertices(scene: Any) -> np.ndarray:
     """World-space vertices of every structure the channel solver would trace."""
     from witwin_server.api import StructureMap
@@ -103,13 +115,12 @@ def scene_vertices(scene: Any) -> np.ndarray:
         if any(obj.get_component(name) is not None for name in _CHANNEL_COMPONENTS):
             continue
         if obj.get_component("PlatformGeometry") is not None:
-            geometry = StructureMap.to_platform(obj).geometry
-            mesh = geometry if hasattr(geometry, "world_vertices") else geometry.to_mesh()
+            vertices = _world_vertices(StructureMap.to_platform(obj).geometry)
         elif ChannelAdapter._is_plain_mesh(obj):
-            mesh = ChannelAdapter.mesh_geometry(obj)
+            vertices = _world_vertices(ChannelAdapter.mesh_geometry(obj))
         else:
             continue
-        chunks.append(mesh.world_vertices.detach().cpu().numpy().reshape(-1, 3))
+        chunks.append(vertices.detach().cpu().numpy().reshape(-1, 3))
     if not chunks:
         return np.zeros((0, 3), np.float32)
     return np.concatenate(chunks).astype(np.float32, copy=False)

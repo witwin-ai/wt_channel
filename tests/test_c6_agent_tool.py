@@ -345,3 +345,26 @@ def test_tool_refuses_a_scene_that_is_not_open(monkeypatch):
 
     with pytest.raises(ToolError, match="not open"):
         asyncio.run(tools.registered[0].run({"scene_id": "gone"}))
+
+
+def test_scene_vertices_include_platform_primitives():
+    """A PlatformGeometry box (the Channel Sim buildings) counts as geometry.
+
+    witwin 0.4's primitive ``to_mesh()`` returns ``(vertices, faces)``; reading
+    ``.world_vertices`` off that tuple broke the RadioMap Solve's ground check.
+    """
+    from witwin_server.api import PlatformGeometryComponent, Scene as StudioScene, SceneObject
+    from wt_channel.agent_tools import scene_vertices
+
+    studio = StudioScene()
+    building = SceneObject(name="Building", mesh_type="Empty")
+    building.add_component(PlatformGeometryComponent())
+    geometry = building.get_component("PlatformGeometry")
+    geometry.kind = "box"
+    geometry.size = [4.0, 6.0, 2.0]
+    building.get_component("Transform").position = [10.0, 3.0, -5.0]
+    studio.add_object(building)
+
+    vertices = scene_vertices(studio)
+    assert vertices.shape == (8, 3)
+    np.testing.assert_allclose(vertices.mean(axis=0), [10.0, 3.0, -5.0], atol=1e-5)
