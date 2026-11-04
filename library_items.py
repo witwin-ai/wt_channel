@@ -13,7 +13,26 @@ Each prefab carries components straight from the registry (no platform ``Scene``
 built, so dropping never needs CUDA). The factory adds any extra objects to the drop
 scene and returns the primary one.
 """
+import inspect as _inspect
+from pathlib import Path as _Path
+
 from witwin_server.api import Library, SceneObject
+
+
+_PREVIEWS = _Path(__file__).resolve().parent / "previews" / "library"
+
+
+def _preview(item_id):
+    """The Library card image for an item, as keyword arguments.
+
+    Images are renders from Studio's `scripts/template-previews/library_items.py`.
+    Empty when the file is missing or Studio's `register_item` has no `preview`
+    parameter yet (older Studio), so the card falls back to the item's icon.
+    """
+    path = _PREVIEWS / f"{item_id}.webp"
+    if not path.is_file() or "preview" not in _inspect.signature(Library.register_item).parameters:
+        return {}
+    return {"preview": str(path)}
 
 _CATEGORY = "channel"
 
@@ -100,19 +119,19 @@ def register() -> None:
     Library.register_category(_CATEGORY, "Channel", icon="radio", order=21)
     Library.register_item("channel_demo", "Channel Scene (Demo)", _CATEGORY,
                           icon="sparkles", object_type="empty", factory=_make_demo,
-                          description="Tx + Rx + RadioMap over a ground plane; Solve for a radiomap")
+                          description="Tx + Rx + RadioMap over a ground plane; Solve for a radiomap", **_preview("channel_demo"))
     Library.register_item("channel_tx", "Tx", _CATEGORY,
                           icon="radio", object_type="empty", factory=_make_tx,
-                          description="Channel transmitter endpoint (antenna inline)")
+                          description="Channel transmitter endpoint (antenna inline)", **_preview("channel_tx"))
     Library.register_item("channel_rx", "Rx", _CATEGORY,
                           icon="antenna", object_type="empty", factory=_make_rx,
-                          description="Channel point receiver endpoint (antenna inline)")
+                          description="Channel point receiver endpoint (antenna inline)", **_preview("channel_rx"))
     Library.register_item("channel_radiomap", "RadioMap", _CATEGORY,
                           icon="grid", object_type="empty", factory=_make_radiomap,
-                          description="2D radiomap field: receiver grid + solver + result viewer")
+                          description="2D radiomap field: receiver grid + solver + result viewer", **_preview("channel_radiomap"))
     Library.register_item("channel_pathsolver", "Path Solver", _CATEGORY,
                           icon="route", object_type="empty", factory=_make_pathsolver,
-                          description="Point-to-point path solve; auto-finds the Tx/Rx")
+                          description="Point-to-point path solve; auto-finds the Tx/Rx", **_preview("channel_pathsolver"))
 
 
 register()

@@ -36,10 +36,12 @@ print(list(scene.objects))
 
 ## What is in the Scene
 
-`scenes/main.wtscene` is the Channel plugin's library demo: a concrete
-`Channel Ground`, a transmitter `Tx` and a receiver `Rx`, a `RadioMap` (a 2D
-coverage map solved over the ground) and a `Path Solver` (the rays between Tx
-and Rx). Both solvers run at 3.5 GHz.
+`scenes/main.wtscene` is a small street block: a concrete `Channel Ground`,
+three buildings (`Building North` and `Building East` in concrete, `Building
+South` in brick, each with an ITU `MaterialPreset`), a transmitter `Tx` at 3 m
+and a receiver `Rx` at 1.5 m, 13 m apart. `RadioMap` solves a 2D coverage map
+over the ground and `Path Solver` traces the rays between Tx and Rx, which
+reflect off the buildings. Both solvers run at 3.5 GHz.
 
 ## Solve
 
