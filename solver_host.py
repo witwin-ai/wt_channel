@@ -13,11 +13,28 @@ from typing import Any, Dict
 import numpy as np
 
 
-PLUGIN_PARENT = Path(__file__).resolve().parent.parent
-if str(PLUGIN_PARENT) not in sys.path:
-    sys.path.insert(0, str(PLUGIN_PARENT))
+def _import_this_plugin() -> None:
+    """Import this folder as the ``wt_channel`` package.
 
-import wt_channel  # noqa: F401  (registers Channel components before Scene.from_dict)
+    The folder name is not always ``wt_channel`` (a worktree, a cloud store
+    ``<id>/<version>/`` folder), so putting the parent on ``sys.path`` and
+    importing by name can load another checkout of the Plugin, or none.
+    Same fix as wt_radar 20faef8.
+    """
+    import importlib.util
+
+    root = Path(__file__).resolve().parent
+    loaded = sys.modules.get("wt_channel")
+    if loaded is not None and Path(getattr(loaded, "__file__", None) or ".").resolve().parent == root:
+        return  # imported as part of this package (tests, in-process callers)
+    spec = importlib.util.spec_from_file_location(
+        "wt_channel", root / "__init__.py", submodule_search_locations=[str(root)])
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["wt_channel"] = module
+    spec.loader.exec_module(module)  # registers Channel components before Scene.from_dict
+
+
+_import_this_plugin()
 from witwin.studio.solver import SolverCancelled, query, serve
 from wt_channel.adapter.path_solve import (
     PathLineBuilder,
