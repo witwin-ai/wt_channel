@@ -8,6 +8,7 @@ import asyncio
 import io
 import json
 import tomllib
+from pathlib import Path
 import shutil
 import sys
 import uuid
@@ -543,3 +544,52 @@ def test_live_path_solver_host_solves_and_queries(adapter, path_ready):
     finally:
         host.shutdown(force=True)
         shutil.rmtree(work_dir, ignore_errors=True)
+
+
+# --- bare solves (witwin solve with no config) ---------------------------------
+
+def _bare_scene():
+    from types import SimpleNamespace
+
+    class _Solver:
+        def __init__(self, mode):
+            self.mode = mode
+
+        def _resolve(self, field_name, component_name):
+            return {"transmitter": "Tx", "receiver": "Rx"}[field_name]
+
+        def _resolve_transmitter(self, scene):
+            return "Tx"
+
+        def _solver_config(self, transmitter, receiver):
+            return {"mode": self.mode, "transmitter": transmitter, "receiver": receiver,
+                    "component": {"frequency": 3.5e9}}
+
+    def obj(name, components):
+        return SimpleNamespace(name=name, get_component=components.get)
+
+    return SimpleNamespace(objects={
+        "path": obj("Path Solver", {"PathSolver": _Solver("path")}),
+        "map": obj("RadioMap", {"RadioMap": _Solver("radiomap")}),
+    })
+
+
+def test_bare_solve_reads_the_scene_component():
+    from types import SimpleNamespace
+    from wt_channel import solver_host
+
+    scene = _bare_scene()
+    path = solver_host._config_from_scene(scene, "path")
+    assert (path["transmitter"], path["receiver"]) == ("Tx", "Rx")
+    radiomap = solver_host._config_from_scene(scene, "radiomap")
+    assert (radiomap["transmitter"], radiomap["receiver"]) == ("Tx", "RadioMap")
+    with pytest.raises(ValueError, match="no PathSolver"):
+        solver_host._config_from_scene(SimpleNamespace(objects={}), "path")
+
+
+def test_path_solver_runs_paths_on_a_bare_config():
+    """The two solver ids share solver_host.py; the manifest tells the Path one its mode."""
+    manifest = tomllib.loads((Path(__file__).parents[1] / "witwin.toml").read_text(encoding="utf-8"))
+    solvers = {s["id"]: s for s in manifest["contributes"]["solvers"]}
+    assert solvers["witwin.channel.path"]["runtime"]["env"] == {"WT_CHANNEL_SOLVER_MODE": "path"}
+    assert "env" not in solvers["witwin.channel.radiomap"]["runtime"]

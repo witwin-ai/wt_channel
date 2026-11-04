@@ -50,6 +50,8 @@ maxParallel = 1
 
 [contributes.solvers.runtime]
 python = "${project:python}"
+# The shared solver_host.py solves Paths when a config does not say "mode".
+env = { WT_CHANNEL_SOLVER_MODE = "path" }
 
 [contributes.solvers.capabilities]
 cancel = true

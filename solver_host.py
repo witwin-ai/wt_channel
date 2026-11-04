@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import math
+import os
 import sys
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -44,6 +45,12 @@ from wt_channel.adapter.path_solve import (
     _gain_to_rgba,
 )
 from wt_channel.adapter.solve import SolveRunner
+from wt_channel.adapter.endpoint_map import RX_COMPONENT, TX_COMPONENT
+
+# Both Channel solvers run this file. The manifest sets this per solver id, so a
+# bare config (no "mode") solves what the solver id names; Studio's components
+# always send "mode".
+_DEFAULT_MODE = os.environ.get("WT_CHANNEL_SOLVER_MODE") or "radiomap"
 
 
 # Scenes this process received, by the caller's scene_key (newest last). Dragging the
@@ -124,9 +131,39 @@ def solve(ctx, scene, config):
     raise _plain_error(*failure)
 
 
+def _config_from_scene(scene, mode: str) -> Dict[str, Any]:
+    """The config a bare solve runs: the scene's first solver component, as its Solve button.
+
+    ``witwin solve witwin.channel.path`` (or ``.radiomap``) and ``POST /v1/solve``
+    with no ``component`` land here. Tx and Rx resolve the way the buttons do:
+    the assigned endpoint, else the first one in the scene; a RadioMap is its
+    own receiver.
+    """
+    type_name = "PathSolver" if mode == "path" else "RadioMap"
+    for obj in scene.objects.values():
+        comp = obj.get_component(type_name)
+        if comp is None:
+            continue
+        if mode == "path":
+            transmitter = comp._resolve("transmitter", TX_COMPONENT)
+            receiver = comp._resolve("receiver", RX_COMPONENT)
+        else:
+            transmitter = comp._resolve_transmitter(scene)
+            receiver = obj.name
+        if transmitter is None or receiver is None:
+            needs = "a Tx and a point Rx" if mode == "path" else "a Tx"
+            raise ValueError(f"{type_name} {obj.name!r} needs {needs} in the scene")
+        return comp._solver_config(transmitter, receiver)
+    raise ValueError(f"the scene has no {type_name}; add one, or pass a config with 'component'")
+
+
 def _solve(ctx, scene, config):
-    config = config or {}
-    mode = str(config.get("mode") or "radiomap")
+    config = dict(config or {})
+    mode = str(config.get("mode") or _DEFAULT_MODE)
+    # Bare means no "component" key at all: Studio always sends one (live
+    # previews send no Scene, only the scene_key of the one they cached).
+    if "component" not in config and not config.get("scene_key"):
+        config = {**_config_from_scene(scene, mode), **config, "mode": mode}
     comp = _component(config)
     transmitter = str(config.get("transmitter") or "")
     receiver = str(config.get("receiver") or "")
