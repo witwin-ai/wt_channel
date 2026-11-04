@@ -8,6 +8,8 @@ repository = "https://github.com/witwin-ai/wt_channel"
 dependencies = ["scipy", "numpy"]
 icon = "radio"
 enabled = true
+# The EM fields of Material, Transmitter, Receiver and Field (studio.em, 2026-11-03).
+pluginDependencies = [{ id = "studio.em" }]
 
 [engines]
 witwin = "^1.0.0"

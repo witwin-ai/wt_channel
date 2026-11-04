@@ -32,10 +32,10 @@ from witwin_server.api import (
     tab_group,
     vector3_field,
     FREQUENCY_UNITS,
-    FieldComponent,
     VOLUME_FLOAT32_FORMAT,
     FieldViz,
 )
+from witwin_server.plugins_builtin.em.api import FieldComponent
 
 from ..adapter.common import json_value
 from ..adapter.live import LiveTxScheduler
