@@ -123,20 +123,26 @@ def mc_ready(cuda):
     return True
 
 
+def _tiny_path_world():
+    # A Core world with one wall between a Tx and a point Rx, built directly (not
+    # through the adapter) so an adapter bug still fails its own test.
+    import torch
+    from witwin.core import AntennaState, Box, Scene, Structure
+    from wt_channel.adapter.itu import itu_material
+    wall = Structure(Box(size=(0.3, 4.0, 4.0), position=(2.0, 0.0, 2.0)),
+                     itu_material("concrete", 3.5e9), name="wall")
+    return Scene(structures=[wall], endpoints=[
+        AntennaState(1, "tx", torch.tensor([0.0, 0.0, 2.0]), power_w=1.0),
+        AntennaState(2, "rx", torch.tensor([4.0, 0.0, 2.0])),
+    ])
+
+
 @pytest.fixture(scope="session")
 def path_ready(cuda):
     """Gate the point-to-point path live solve on its solver running here."""
-    import witwin.channel as ch
-    from witwin.core import Box, Material, Structure
-    scene = ch.Scene(
-        structures=[Structure(Box(size=(0.3, 4.0, 4.0), position=(2.0, 0.0, 2.0)),
-                              Material.from_itu("concrete"), name="wall")],
-        transmitters=[ch.Transmitter(name="tx", position=(0.0, 0.0, 2.0))],
-        receivers=[ch.Receiver(name="rx", position=(4.0, 0.0, 2.0))],
-        frequency=3.5e9, device="cuda",
-    )
+    from witwin.channel import path
     try:
-        ch.path.solve(scene=scene, transmitter="tx", receiver="rx")
+        path.solve(_tiny_path_world(), path.Config(max_depth=1), reference_frequency_hz=3.5e9)
     except Exception as exc:  # noqa: BLE001 - test gate: needs-user-verification if it can't run
         pytest.skip(f"path solver unavailable in this environment: {exc}")
     return True

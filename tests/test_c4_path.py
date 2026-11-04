@@ -9,45 +9,60 @@ import io
 import json
 import numpy as np
 import pytest
-from witwin.core import Box, Material, Structure
+from witwin.core import Box, Structure
+from wt_channel.adapter.itu import itu_material
 
 _C = 299792458.0
 
 
 def _synthetic_result():
-    """A 2-path PathResult: a LoS path and a single-reflection path (geometry included)."""
+    """A 2-path solve: a LoS path and a single-reflection path (geometry included)."""
     import torch
-    from witwin.channel.path.result import PathResult
+    from witwin.channel.path import PathResult
+    from wt_channel.adapter.path_solve import PathSolve
 
     ps = (1, 1, 1, 1, 2)        # path shape
-    cs = (1, 1, 1, 1, 2, 1)     # coeff shape (+ time)
-    ds = (1, 1, 1, 1, 2, 2)     # depth shape
-    payload = {
-        "name": "path", "num_rx": 1, "num_tx": 1, "num_rx_ant": 1, "num_tx_ant": 1,
-        "num_time_steps": 1, "max_num_paths": 2, "max_depth": 2,
-        "tx_pos": (0.0, 0.0, 2.0),
-        "tx_positions": torch.tensor([[0.0, 0.0, 2.0]]),
-        "rx_positions": torch.tensor([[6.0, 0.0, 1.5]]),
-        "frequency": 3.5e9, "wavelength": _C / 3.5e9,
-        "a": torch.tensor([1.0 + 0j, 0.5 + 0j], dtype=torch.complex64).reshape(cs),
-        "tau": torch.tensor([2.0e-8, 3.0e-8]).reshape(ps),
-        "theta_t": torch.zeros(ps), "phi_t": torch.zeros(ps),
-        "theta_r": torch.zeros(ps), "phi_r": torch.zeros(ps),
-        "valid": torch.tensor([True, True]).reshape(ps),
-        "types": torch.tensor([[0, 0], [1, 0]], dtype=torch.int32).reshape(ds),
-        "num_paths": torch.tensor([2], dtype=torch.int32).reshape((1, 1, 1, 1)),
-        "vertices": torch.tensor(
+    cs = ps + (1,)              # coeff shape (+ time)
+    ds = ps + (2,)              # depth shape
+    result = PathResult(
+        a=torch.tensor([1.0 + 0j, 0.5 + 0j], dtype=torch.complex64).reshape(cs),
+        tau=torch.tensor([2.0e-8, 3.0e-8]).reshape(ps),
+        theta_t=torch.zeros(ps), phi_t=torch.zeros(ps),
+        theta_r=torch.zeros(ps), phi_r=torch.zeros(ps),
+        valid=torch.tensor([True, True]).reshape(ps),
+        interaction_type=torch.tensor([[0, 0], [1, 0]], dtype=torch.int32).reshape(ds),
+        primitive_id=torch.zeros(ds, dtype=torch.int32),
+        material_id=torch.zeros(ds, dtype=torch.int32),
+        position=torch.tensor(
             [[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
              [[3.0, 0.0, 1.0], [0.0, 0.0, 0.0]]]).reshape(ds + (3,)),
-        "metadata": {},
-    }
-    return PathResult._from_payload(payload)
+        normal=torch.zeros(ds + (3,)),
+        num_paths=torch.tensor([2], dtype=torch.int32).reshape((1, 1, 1, 1)),
+        metadata={},
+    )
+    return PathSolve(result=result, frequency=3.5e9,
+                     tx_positions=np.array([[0.0, 0.0, 2.0]], dtype=np.float32),
+                     rx_positions=np.array([[6.0, 0.0, 1.5]], dtype=np.float32))
+
+
+def _link_world():
+    """A Core world: a Tx and a point Rx 6 m apart, a wall beside the line (LoS stays clear)."""
+    import torch
+    from witwin.core import AntennaState, Scene
+    from wt_channel.adapter.channel_adapter import CHANNEL_METADATA_KEY
+
+    wall = Structure(Box(size=(0.3, 6.0, 6.0), position=(3.0, 4.0, 3.0)),
+                     itu_material("concrete", 3.5e9), name="wall")
+    return Scene(structures=[wall], endpoints=[
+        AntennaState(1, "tx", torch.tensor([0.0, 0.0, 3.0]), power_w=1.0, metadata={"name": "tx"}),
+        AntennaState(2, "rx", torch.tensor([6.0, 0.0, 3.0]), metadata={"name": "rx"}),
+    ], metadata={CHANNEL_METADATA_KEY: {"frequency_hz": 3.5e9}})
 
 
 def test_synthetic_result_builds():
-    result = _synthetic_result()
-    assert result.max_num_paths == 2
-    assert result.vertices is not None
+    solve = _synthetic_result()
+    assert solve.result.max_num_paths == 2
+    assert solve.result.position is not None
 
 
 def test_path_lines_classified_and_routed():
@@ -102,7 +117,7 @@ def test_build_batch_empty_result_returns_empty_batch():
     from wt_channel.adapter.path_solve import PathLineBuilder, RayBatch
 
     class _NoGeom:
-        vertices = None
+        result = None
 
     batch = PathLineBuilder.build_batch(_NoGeom())
     assert isinstance(batch, RayBatch)
@@ -284,24 +299,29 @@ def test_path_solver_color_mode_switches_channel(monkeypatch):
 
 
 def test_path_config_builder():
-    import witwin.channel as ch
+    from witwin.channel import path
     from wt_channel.adapter.path_solve import PathConfigBuilder
     from wt_channel.components.pathsolver import PathSolverComponent
 
     comp = PathSolverComponent()
-    comp.num_samples = 5000
     comp.max_bounces = 4
     comp.max_diffraction_order = 2
     comp.use_max_num_paths = True
     comp.max_num_paths = 25
-    comp.draw_paths = True
-    config = PathConfigBuilder.build(ch, comp)
-    assert isinstance(config, ch.path.Config)
-    assert config.num_samples == 5000
-    assert config.max_bounces == 4
-    assert config.max_diffraction_order == 2
-    assert config.max_num_paths == 25
-    assert config.return_geometry is True
+    config = PathConfigBuilder.build(comp)
+    assert isinstance(config, path.Config)
+    assert config.max_depth == 4
+    # 0.5 diffraction is first order; the order only switches the component on.
+    assert config.components == frozenset({"los", "reflection", "diffraction"})
+    assert config.max_paths == 25
+
+    comp.max_bounces = 0
+    comp.max_diffraction_order = 0
+    comp.use_max_num_paths = False
+    config = PathConfigBuilder.build(comp)
+    assert config.max_depth == 0
+    assert config.components == frozenset({"los"})
+    assert config.max_paths is None
 
 
 def test_path_solver_component_uses_solver_api_for_solve(monkeypatch):
@@ -448,22 +468,16 @@ def test_solver_host_path_cache_matches_pathplots():
 
 def test_live_path_solve(adapter, path_ready):
     """Round-trip then path-solve a discrete Tx<->Rx link; check geometry + CIR."""
-    import witwin.channel as ch
     from wt_channel.adapter.path_solve import PathLineBuilder, PathSolveRunner
 
     # Keep the wall in the scene while leaving the Tx/Rx center line visible.
-    scene = ch.Scene(
-        structures=[Structure(Box(size=(0.3, 6.0, 6.0), position=(3.0, 4.0, 3.0)),
-                              Material.from_itu("concrete"), name="wall")],
-        transmitters=[ch.Transmitter(name="tx", position=(0.0, 0.0, 3.0))],
-        receivers=[ch.Receiver(name="rx", position=(6.0, 0.0, 3.0))],
-        frequency=3.5e9, device="cuda",
-    )
+    scene = _link_world()
     studio = adapter.to_studio(scene)
     comp = studio.get_object_by_name("Path Solver").get_component("PathSolver")
     comp.num_samples = 2000
     result = PathSolveRunner.run(studio, comp, transmitter="tx", receiver="rx")
-    assert result.vertices is not None
+    assert result.result.position is not None
+    assert result.frequency == 3.5e9
     lines = PathLineBuilder.build(result)
     assert len(lines) >= 1
     assert any(line.interaction == "los" for line in lines)
@@ -472,17 +486,10 @@ def test_live_path_solve(adapter, path_ready):
 def test_live_path_solver_host_solves_and_queries(adapter, path_ready, solver_child):
     """Exercise the real RFC-012 child process path for path solve + queries."""
     from pathlib import Path
-    import witwin.channel as ch
     from witwin_server.api import make_scene_ref
 
     process = solver_child("witwin.channel.path")
-    scene = ch.Scene(
-        structures=[Structure(Box(size=(0.3, 6.0, 6.0), position=(3.0, 4.0, 3.0)),
-                              Material.from_itu("concrete"), name="wall")],
-        transmitters=[ch.Transmitter(name="tx", position=(0.0, 0.0, 3.0))],
-        receivers=[ch.Receiver(name="rx", position=(6.0, 0.0, 3.0))],
-        frequency=3.5e9, device="cuda",
-    )
+    scene = _link_world()
     studio = adapter.to_studio(scene)
     comp = studio.get_object_by_name("Path Solver").get_component("PathSolver")
     comp.num_samples = 256
