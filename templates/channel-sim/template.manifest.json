@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "templateId": "channel-sim",
-  "templateVersion": "1.1.0",
+  "templateVersion": "1.1.1",
   "projectFormatVersion": "1.0",
   "minProtocol": 1,
   "totalBytes": 16386,
-  "treeSha256": "b5310dee7931568bf485d79c33e13665a3b1d49cace8d44282e3a58881d6540a",
+  "treeSha256": "ace4cdc7cc4c66492bfe607e7d719a9defc579d1fc93a315d15e55ec77a8bc83",
   "recommendedPlugins": [
     "witwin.channel"
   ],
@@ -23,7 +23,7 @@
     {
       "path": "pyproject.toml",
       "bytes": 817,
-      "sha256": "3fdf732cf51dc2488c4a9f22dda02e226a04f034bda8e4df61e9cab3c3aba571"
+      "sha256": "09a335dd2b59773068d7dcf99691f2cbc7860a6b840fe573736f5f45aa8c492b"
     },
     {
       "path": "scenes/main.wtscene",
@@ -43,7 +43,7 @@
     {
       "path": "witwin.toml",
       "bytes": 249,
-      "sha256": "066b6cb437b3d070a84f290c1ec5948884af438942a225f34557133542cd2d9a"
+      "sha256": "5326d12ecf2fd2c006a7df8e1ae3aafcc31b3fbdeb2acbbc6ba8c0d8cdcc286e"
     }
   ]
 }

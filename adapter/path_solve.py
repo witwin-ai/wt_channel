@@ -1,12 +1,14 @@
 """Point-to-point path solve + CIR/CFR/taps extraction + viewport ray drawing (§6.3 / §7.4).
 
-``path.solve(*, scene, transmitter, receiver, config) -> PathResult`` traces discrete
-Tx<->Rx links (CIR / CFR / taps). With ``return_geometry=True`` the result carries
-per-path interaction ``vertices``; :class:`PathLineBuilder` turns them into per-path
-poly-lines (``Tx -> v0 -> ... -> Rx``) colored by interaction type for a declarative
-viewport render spec. ``PathPlots`` reduces a ``PathResult`` to 1D plot data for the
-component figure. Live path solve needs CUDA RayD/OptiX (the extractors are CPU-testable
-against a synthetic ``PathResult``).
+witwin-channel 0.5's ``path.solve(scene, config, *, reference_frequency_hz) -> PathResult``
+enumerates the paths of every Tx<->Rx pair in a Core world (CIR / CFR / taps). The
+result always carries each path's interaction points (``position``, one slot per depth,
+``interaction_type`` NONE in unused slots) but neither the solve frequency nor the
+endpoint positions, so :class:`PathSolveRunner` returns a :class:`PathSolve` that keeps
+them next to it. :class:`PathLineBuilder` turns a solve into per-path poly-lines
+(``Tx -> v0 -> ... -> Rx``) colored by interaction type; ``PathPlots`` reduces it to 1D
+plot data for the component figure. Live path solve needs CUDA RayD/OptiX (the
+extractors are CPU-testable against a synthetic ``PathResult``).
 """
 from dataclasses import dataclass
 from typing import Any, List, Tuple
@@ -16,10 +18,19 @@ import numpy as np
 from .channel_adapter import ChannelAdapter
 from .common import num
 
-# InteractionType codes (witwin.channel.path.result.InteractionType).
+# Path-class codes of the ray batch ``types`` buffer (the viewport reads them).
 _LOS = 0
 _REFLECTION = 1
 _DIFFRACTION = 2
+
+# witwin.channel.path.InteractionType bits of one depth slot (NONE = 0 is an unused
+# slot). Transmission (4) and scattering (8) paths draw as LoS: the default
+# components never produce them.
+_SLOT_REFLECTION = 1
+_SLOT_DIFFRACTION = 2
+
+# The 0.5 path solver's diffraction is first order, and its reflection depth stops at 5.
+_MAX_DIFFRACTION_ORDER = 1
 
 # Per-interaction poly-line colors.
 COLORS = {"los": "#22d3ee", "reflection": "#f59e0b", "diffraction": "#a855f7"}
@@ -137,38 +148,94 @@ class PlotData:
     title: str
 
 
+def _components(max_bounces: int, diffraction_order: int) -> frozenset:
+    components = {"los"}
+    if max_bounces > 0:
+        components.add("reflection")
+    if diffraction_order > 0:
+        components.add("diffraction")
+    return frozenset(components)
+
+
 class PathConfigBuilder:
-    """Read the PathSolve component into a ``path.Config``."""
+    """Read the PathSolver component into a witwin-channel 0.5 ``path.Config``.
+
+    0.5 enumerates paths by interaction depth and always returns their geometry, so
+    ``num_samples``, ``synthetic_array`` and ``draw_paths`` no longer reach the solver;
+    the component keeps them for saved scenes (``draw_paths`` still gates drawing).
+    """
 
     @staticmethod
-    def build(ch: Any, comp: Any) -> Any:
-        max_num_paths = int(comp.max_num_paths) if bool(comp.use_max_num_paths) else None
-        return ch.path.Config(
-            max_num_paths=max_num_paths,
-            max_diffraction_order=int(comp.max_diffraction_order),
-            return_geometry=bool(comp.draw_paths),
-            num_samples=int(comp.num_samples),
-            max_bounces=int(comp.max_bounces),
-            synthetic_array=bool(comp.synthetic_array),
+    def build(comp: Any) -> Any:
+        from witwin.channel import path
+
+        bounces = int(comp.max_bounces)
+        order = min(int(comp.max_diffraction_order), _MAX_DIFFRACTION_ORDER)
+        max_paths = int(comp.max_num_paths) if bool(comp.use_max_num_paths) else None
+        return path.Config(
+            max_depth=max(bounces, order),
+            components=_components(bounces, order),
+            max_paths=max_paths,
         )
 
 
+@dataclass
+class PathSolve:
+    """One ``path.solve`` plus what the drawing and the plots also need.
+
+    ``result`` is the library ``PathResult`` with axes ``(rx, rx_ant, tx, tx_ant,
+    path[, depth])``; the runner restricts the world to one Tx and one Rx, so index 0
+    of both is the solved link. ``frequency`` is the solve frequency in Hz;
+    ``tx_positions`` / ``rx_positions`` are ``(n, 3)`` float32 world positions in the
+    result's Tx / Rx order.
+    """
+
+    result: Any
+    frequency: float
+    tx_positions: np.ndarray
+    rx_positions: np.ndarray
+
+    def cir(self, *, normalize_delays: bool = True):
+        return self.result.cir(normalize_delays=normalize_delays)
+
+    def cfr(self, frequencies: Any, *, normalize_delays: bool = True):
+        return self.result.cfr(frequencies, normalize_delays=normalize_delays)
+
+    def taps(self, bandwidth: float, num_taps: int, *, normalize_delays: bool = True):
+        return self.result.taps(bandwidth, num_taps, normalize_delays=normalize_delays)
+
+
+def _endpoint_positions(world: Any, role: str) -> np.ndarray:
+    rows = [np.asarray(_to_list(e.position), dtype=np.float32).reshape(3)
+            for e in world.endpoints if e.role == role]
+    return np.stack(rows) if rows else np.zeros((0, 3), dtype=np.float32)
+
+
+def _to_list(value: Any) -> Any:
+    if hasattr(value, "detach"):
+        return value.detach().cpu().tolist()
+    return value
+
+
 class PathSolveRunner:
-    """Rebuild the platform scene and run a point-to-point path solve."""
+    """Rebuild the Core world and run a point-to-point path solve."""
 
     @staticmethod
-    def run(studio_scene: Any, comp: Any, *, transmitter: str, receiver: str) -> Any:
-        """Run ``path.solve`` for the given Tx/Rx; returns a ``PathResult``."""
-        import witwin.channel as ch
+    def run(studio_scene: Any, comp: Any, *, transmitter: str, receiver: str) -> PathSolve:
+        """Run ``path.solve`` for the named Tx and point Rx."""
+        from witwin.channel import path
 
         frequency = num(comp.frequency)
+        if frequency <= 0.0:
+            raise ValueError("path solve frequency must be positive")
         noise = num(comp.noise_power) if bool(comp.use_noise_power) else None
-        platform = ChannelAdapter().build(
-            studio_scene, frequency=frequency if frequency > 0.0 else None,
-            device=str(comp.device), noise_power=noise)
-        config = PathConfigBuilder.build(ch, comp)
-        return ch.path.solve(scene=platform, transmitter=transmitter,
-                             receiver=receiver, config=config)
+        world = ChannelAdapter().build(studio_scene, frequency=frequency, noise_power=noise,
+                                       transmitter=transmitter, receiver=receiver)
+        result = path.solve(world, PathConfigBuilder.build(comp),
+                            reference_frequency_hz=frequency)
+        return PathSolve(result=result, frequency=frequency,
+                         tx_positions=_endpoint_positions(world, "tx"),
+                         rx_positions=_endpoint_positions(world, "rx"))
 
 
 class PathLineBuilder:
@@ -306,29 +373,25 @@ class PathLineBuilder:
     # ----------------------------- internals -------------------------------
 
     @staticmethod
-    def _extract_paths(result: Any, tx_index: int, rx_index: int):
-        """Pull (valid, types, verts, tx, rx) off the result as numpy arrays.
+    def _extract_paths(solve: Any, tx_index: int, rx_index: int):
+        """Pull (valid, slot types, slot positions, tx, rx) off a :class:`PathSolve`.
 
-        Returns ``None`` when the result carries no geometry (no ``vertices``).
-        Slices the (rx, _, tx, _) link selectors once on the torch view, then
-        ``.cpu().numpy()`` exactly once per tensor.
+        Returns ``None`` for anything that is not a solve with path geometry. Slices
+        the (rx, _, tx, _) link once on the torch tensors, then copies each to the host
+        exactly once.
         """
-        import torch
-        from witwin.channel.core.numerics.tensors import to_torch_view
-
-        if result.vertices is None:
+        paths = getattr(solve, "result", None)
+        if paths is None or getattr(paths, "position", None) is None:
             return None
-        valid_t = to_torch_view(result.valid, dtype=torch.bool)[rx_index, 0, tx_index, 0]
-        types_t = to_torch_view(result.types, dtype=torch.int32)[rx_index, 0, tx_index, 0]
-        verts_t = to_torch_view(result.vertices, dtype=torch.float32)[rx_index, 0, tx_index, 0]
-        tx_t = to_torch_view(result.tx_positions, dtype=torch.float32)[tx_index]
-        rx_t = to_torch_view(result.rx_positions, dtype=torch.float32)[rx_index]
+        if tx_index >= len(solve.tx_positions) or rx_index >= len(solve.rx_positions):
+            return None
+        link = (rx_index, 0, tx_index, 0)
         return (
-            valid_t.detach().cpu().numpy(),
-            types_t.detach().cpu().numpy(),
-            verts_t.detach().cpu().numpy(),
-            tx_t.detach().cpu().numpy(),
-            rx_t.detach().cpu().numpy(),
+            paths.valid[link].detach().cpu().numpy(),
+            paths.interaction_type[link].detach().cpu().numpy(),
+            paths.position[link].detach().cpu().numpy(),
+            np.asarray(solve.tx_positions[tx_index], dtype=np.float32),
+            np.asarray(solve.rx_positions[rx_index], dtype=np.float32),
         )
 
     @staticmethod
@@ -347,10 +410,11 @@ class PathLineBuilder:
     @staticmethod
     def _classify_path(slots: np.ndarray) -> str:
         # A path is diffraction if it bends an edge, else reflection if it
-        # bounces, else LoS — matches the original semantics.
-        if (slots == _DIFFRACTION).any():
+        # bounces, else LoS. Slots are InteractionType bit flags.
+        slots = np.asarray(slots, dtype=np.int64)
+        if (slots & _SLOT_DIFFRACTION).any():
             return "diffraction"
-        if (slots == _REFLECTION).any():
+        if (slots & _SLOT_REFLECTION).any():
             return "reflection"
         return "los"
 

@@ -16,13 +16,14 @@ three print OK in your env, the gated live tests (test_c3 deterministic / test_c
 will run and pass there automatically — no code change needed.
 """
 import witwin.channel as ch
-from witwin.core import Box, Material, Structure
+from witwin.core import Box, Structure
+from wt_channel.adapter.itu import itu_material
 
 
 def radiomap_scene():
     return ch.Scene(
         structures=[Structure(Box(size=(8.0, 8.0, 0.1), position=(0.0, 0.0, 0.0)),
-                              Material.from_itu("concrete"), name="g")],
+                              itu_material("concrete", 3.5e9), name="g")],
         transmitters=[ch.Transmitter(name="tx", position=(0.0, 0.0, 3.0))],
         receivers=[ch.ReceiverGrid(name="rmap", axis="z", position=1.5,
                                    bounds=((-4.0, 4.0), (-4.0, 4.0)), grid_shape=(8, 8))],
@@ -32,7 +33,7 @@ def radiomap_scene():
 def path_scene():
     return ch.Scene(
         structures=[Structure(Box(size=(0.3, 4.0, 4.0), position=(2.0, 0.0, 2.0)),
-                              Material.from_itu("concrete"), name="wall")],
+                              itu_material("concrete", 3.5e9), name="wall")],
         transmitters=[ch.Transmitter(name="tx", position=(0.0, 0.0, 2.0))],
         receivers=[ch.Receiver(name="rx", position=(4.0, 0.0, 2.0))],
         frequency=3.5e9, device="cuda")
