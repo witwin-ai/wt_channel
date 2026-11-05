@@ -1,6 +1,6 @@
 id = "witwin.channel"
 name = "Channel"
-version = "0.1.0"
+version = "0.1.1"
 author = ""
 description = "Radio channel radiomap solver with 2D visualization."
 license = "GPL-3.0-or-later"
