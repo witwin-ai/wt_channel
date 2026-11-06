@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "templateId": "channel-ml",
+  "templateVersion": "1.0.0",
+  "projectFormatVersion": "1.0",
+  "minProtocol": 1,
+  "totalBytes": 43669,
+  "treeSha256": "0cb886974b218db17c210f1024732832553f912b2bdfc382880ce02f8dbbeb42",
+  "recommendedPlugins": [
+    "witwin.channel"
+  ],
+  "files": [
+    {
+      "path": ".gitignore",
+      "bytes": 475,
+      "sha256": "8ad0b10d81e134e01890b1b68092c51ad49babaf977c139eef918d1479bbaab0"
+    },
+    {
+      "path": ".python-version",
+      "bytes": 5,
+      "sha256": "49a506dd32096b010d75205acf3430c9ae6c40351888129499e5a5e487126c93"
+    },
+    {
+      "path": "README.md",
+      "bytes": 3499,
+      "sha256": "40ac9f55c5be38bd307e7fe68225d6219f68f88a79535b3c91f05ae864eda47e"
+    },
+    {
+      "path": "pyproject.toml",
+      "bytes": 1607,
+      "sha256": "de089764d7d796b093c7c7b1767bd291802fe4974248f1195b3e613833568ebf"
+    },
+    {
+      "path": "scenes/main.wtscene",
+      "bytes": 10341,
+      "sha256": "1af997fd0d8bb75d678accd4a74a0f9474358e49ea734c5aae2e1b930368905b"
+    },
+    {
+      "path": "scripts/evaluate.py",
+      "bytes": 3323,
+      "sha256": "803e679ee46d7d4f8c60b32b6f13a7a2e2d04eb45b646cc4a21e46cc99c6ffd8"
+    },
+    {
+      "path": "scripts/model.py",
+      "bytes": 5605,
+      "sha256": "b618613d2978a3dfc09e7c7014584ba934c8046a9d92c430e76ceadc477ba629"
+    },
+    {
+      "path": "scripts/synthesize.py",
+      "bytes": 8201,
+      "sha256": "91fcb2973d1592590a2a8f63415d2a75f6d671de4a9a92979ab1ececa2b58f24"
+    },
+    {
+      "path": "scripts/train.py",
+      "bytes": 3577,
+      "sha256": "5817ba978c36675c579e2c55e268a081a47c288473316e06ae0f327fd607b68c"
+    },
+    {
+      "path": "studies/link-gain.toml",
+      "bytes": 699,
+      "sha256": "90ef3b95549f5c7b6b0317787721b5bdbf7c98141d4b9ecd95b3d90f3b3cb84d"
+    },
+    {
+      "path": "studies/train-gain.toml",
+      "bytes": 344,
+      "sha256": "3e31f7f21a8af67a2ed64384716dd808a5d316efc46abb03f259e68ddfa21ae8"
+    },
+    {
+      "path": "tasks/channel-pipeline.toml",
+      "bytes": 391,
+      "sha256": "0e6c603985cbf1ffa16aea01cece2eb6968193f8e48aeb30ddc01e8bea4917d0"
+    },
+    {
+      "path": "tests/standin_export.py",
+      "bytes": 1295,
+      "sha256": "c406bb176f174def9bb43c67282c352afb0b1ebbba62aec6930c2d57559212f8"
+    },
+    {
+      "path": "tests/test_pipeline.py",
+      "bytes": 2414,
+      "sha256": "95f1a5c941b82666f3aabe485d4ec4caaf86d5c7ba4419c07bfb9565063893e8"
+    },
+    {
+      "path": "tests/test_project.py",
+      "bytes": 1623,
+      "sha256": "e1b32bd087b7e3cb8e5b9fba1a4f2b5b5902e79fd910ffa6c3f01c9fa7bad2a8"
+    },
+    {
+      "path": "witwin.toml",
+      "bytes": 270,
+      "sha256": "e1fdfa0442861b4979ded5bd88f051a7727337a9a8bfe69fd775960cd9f56352"
+    }
+  ]
+}

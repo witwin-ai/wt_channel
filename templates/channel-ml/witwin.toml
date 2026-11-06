@@ -1,0 +1,8 @@
+[project]
+id = "00000000-0000-4000-8000-000000000013"
+name = "Channel ML"
+format_version = "1.0"
+description = "Synthesize Tx-Rx channels on a street block, train a link-gain model, evaluate it."
+main_scene = "main"
+template_id = "channel-ml"
+template_version = "1.0.0"

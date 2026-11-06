@@ -1,0 +1,22 @@
+# Dataset Study: the Tx-Rx channel at sampled receiver positions on the street block.
+# Run it from the Studies page, or without Studio:
+#   python -m witwin.studio.studies --project . --study link-gain --out .witwin/runs/manual
+name = "Link gain"
+kind = "dataset"
+scene = "main"
+method = {kind = "monte_carlo", samples = 800, sampler = "lhs"}
+export = {kind = "script", path = "scripts/synthesize.py", function = "export"}
+dataset = {dir = "datasets/link-gain", shard_size = 200, splits = {train = 0.8, val = 0.1, test = 0.1}}
+seed = 11
+on_error = "stop"
+resources = {gpus = 1}
+
+[variables.rx_x]
+lower = -9.5
+upper = 9.5
+dist = "uniform"
+
+[variables.rx_z]
+lower = -9.5
+upper = 9.5
+dist = "uniform"
