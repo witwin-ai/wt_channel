@@ -1,6 +1,6 @@
 """Point-to-point path solve + CIR/CFR/taps extraction + viewport ray drawing (§6.3 / §7.4).
 
-witwin-channel 0.5's ``path.solve(scene, config, *, reference_frequency_hz) -> PathResult``
+witwin-channel 0.6's ``path.solve(scene, config, *, reference_frequency_hz) -> PathResult``
 enumerates the paths of every Tx<->Rx pair in a Core world (CIR / CFR / taps). The
 result always carries each path's interaction points (``position``, one slot per depth,
 ``interaction_type`` NONE in unused slots) but neither the solve frequency nor the
@@ -29,7 +29,7 @@ _DIFFRACTION = 2
 _SLOT_REFLECTION = 1
 _SLOT_DIFFRACTION = 2
 
-# The 0.5 path solver's diffraction is first order, and its reflection depth stops at 5.
+# The 0.6 path solver's diffraction is first order, and its reflection depth stops at 5.
 _MAX_DIFFRACTION_ORDER = 1
 
 # Per-interaction poly-line colors.
@@ -158,7 +158,7 @@ def _components(max_bounces: int, diffraction_order: int) -> frozenset:
 
 
 class PathConfigBuilder:
-    """Read the PathSolver component into a witwin-channel 0.5 ``path.Config``.
+    """Read the PathSolver component into a witwin-channel 0.6 ``path.Config``.
 
     0.5 enumerates paths by interaction depth and always returns their geometry, so
     ``num_samples``, ``synthetic_array`` and ``draw_paths`` no longer reach the solver;

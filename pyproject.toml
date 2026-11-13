@@ -27,8 +27,8 @@ dependencies = [
 
 [project.optional-dependencies]
 solve = [
-  "witwin>=0.4",
-  "witwin-channel>=0.5,<0.6",
+  "witwin>=0.4.6,<0.5",
+  "witwin-channel>=0.6,<0.7",
   "torch>=2.4",
 ]
 

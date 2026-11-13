@@ -192,7 +192,9 @@ def _solve(ctx, scene, config):
     try:
         result = _run_with_memory_retry(scene, comp, transmitter, receiver, grid_shape)
         _keep_newest_compiled_scene()
-        ctx.progress(0.9, "extracting Channel radiomap cache")
+        note = getattr(result, "note", None)
+        note = f" ({note})" if note else ""
+        ctx.progress(0.9, f"extracting Channel radiomap cache{note}")
         cache = _radiomap_cache(result)
         result = None
     except Exception as exc:  # noqa: BLE001 - re-raised below without its frames

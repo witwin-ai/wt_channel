@@ -43,11 +43,16 @@ wt_channel/
 ## Conventions
 
 Units everywhere: meters, radians, Hz, S/m. Rotation quaternions are `[w, x, y, z]`.
-Targets **witwin-channel 0.5 / witwin-core 0.4**: the platform scene is the logical
+Targets **witwin-channel 0.6 / witwin-core 0.4.6**: the platform scene is the logical
 `witwin.core.Scene` (structures + `AntennaState` / `ReceiverGrid` endpoints, Studio
 object names in `metadata["name"]`, channel config in `metadata["channel"]`), and every
-solver is `solve(scene, config, *, reference_frequency_hz)`. Channel 0.5 has no ITU
-material helper, so `adapter/itu.py` owns the ITU-R P.2040 table. Plain Studio meshes
+solver is `solve(scene, config, *, reference_frequency_hz)`. The RadioMap's
+`deterministic` solver is `radiomap.Coherent`, `montecarlo` is `radiomap.Stochastic`
+(integrator `basic`) or `experimental.bdpt` (integrator `bdpt`); the Path Solver is
+`path`. Every grid comes back as `[T, rows, cols]` with rows along the RadioMap's u
+axis, so `adapter/solve.grid_map` transposes it into the plane's `[T, v, u]`. A grid
+sample on a transmitter (which 0.6 refuses) moves the grid a quarter cell aside.
+`adapter/itu.py` owns the ITU-R P.2040 table the Studio presets use. Plain Studio meshes
 (e.g. an imported street map) solve as ITU concrete unless they carry a
 `MaterialPreset`, an ITU pick, or hand-edited EM scalars. Only the single isotropic
 antenna element is ported; arrays and other patterns raise. The platform packages

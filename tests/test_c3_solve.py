@@ -1,8 +1,8 @@
 """C3 — solver config + library prefabs (CPU) and the live radiomap solve (CUDA).
 
 The config builders map the RadioMap component's curated fields onto the witwin-channel
-0.5 solver configs (``deterministic.Config``, ``montecarlo.basic.Config``,
-``montecarlo.bdpt.Config``). The library prefabs build correct studio objects. The live
+0.6 solver configs (``radiomap.Coherent``, ``radiomap.Stochastic``,
+``experimental.bdpt.Config``). The library prefabs build correct studio objects. The live
 solve (``test_live_*``) needs CUDA RayD and is skipped otherwise — it must not be faked
 as passing.
 """
@@ -23,7 +23,7 @@ def _result_component():
 
 
 def test_deterministic_config_maps_fields():
-    from witwin.channel import deterministic
+    from witwin.channel import radiomap
     from wt_channel.adapter.solve import ConfigBuilder
 
     comp = _result_component()
@@ -33,15 +33,16 @@ def test_deterministic_config_maps_fields():
 
     config = ConfigBuilder.deterministic(comp)
 
-    assert isinstance(config, deterministic.Config)
+    assert isinstance(config, radiomap.Coherent)
     assert config.max_depth == 3
-    assert config.max_diffraction_order == 1  # public capability is first order
+    # Diffraction is first order in 0.6; Coherent has no order field, only the component.
     assert config.components == frozenset({"los", "reflection", "diffraction"})
+    assert config.combine == "field"  # the 0.5 default, coherent=True
     assert config.return_field is False  # the radiomap only reads path gain
 
 
 def test_montecarlo_basic_config_maps_fields():
-    from witwin.channel.montecarlo import basic
+    from witwin.channel import radiomap
     from wt_channel.adapter.solve import ConfigBuilder
 
     comp = _result_component()
@@ -52,7 +53,7 @@ def test_montecarlo_basic_config_maps_fields():
 
     config = ConfigBuilder.montecarlo(comp)
 
-    assert isinstance(config, basic.Config)
+    assert isinstance(config, radiomap.Stochastic)
     assert config.samples == 4096
     assert config.max_depth == 2
     assert config.seed == 7
@@ -60,7 +61,7 @@ def test_montecarlo_basic_config_maps_fields():
 
 
 def test_montecarlo_bdpt_config_maps_fields():
-    from witwin.channel.montecarlo import bdpt
+    from witwin.channel.experimental import bdpt
     from wt_channel.adapter.solve import ConfigBuilder
 
     comp = _result_component()
@@ -114,19 +115,20 @@ def test_radiomap_maps_without_noise_have_no_sinr():
         maps.metric("sinr")
 
 
-def test_grid_map_unflattens_monte_carlo_basic_layout():
-    # MC basic publishes a grid as (T, n_v * n_u), row-major over (v, u); the
-    # deterministic solver already publishes (T, n_v, n_u).
+def test_grid_map_turns_solver_rows_into_plane_rows():
+    # witwin-channel 0.6 publishes every grid as [T, rows, cols]; the RadioMap grid's
+    # rows run along u, so the solver map is (T, n_u, n_v) and the plane wants (T, n_v, n_u).
     from wt_channel.adapter.solve import grid_map
 
-    flat = np.arange(2 * 6, dtype=np.float32).reshape(2, 6)  # T=2, grid (n_u=3, n_v=2)
-    shaped = grid_map(flat, (3, 2))
+    solved = np.arange(2 * 6, dtype=np.float32).reshape(2, 3, 2)  # T=2, grid (n_u=3, n_v=2)
+    shaped = grid_map(solved, (3, 2))
 
     assert shaped.shape == (2, 2, 3)
-    assert shaped[1, 1, 2] == flat[1, 1 * 3 + 2]
-    np.testing.assert_array_equal(grid_map(shaped, (3, 2)), shaped)
+    assert shaped[1, 1, 2] == solved[1, 2, 1]  # [t, iv, iu] == [t, row iu, col iv]
     with pytest.raises(ValueError, match="grid map"):
-        grid_map(np.zeros((1, 5), np.float32), (3, 2))
+        grid_map(shaped, (3, 2))  # already in plane order: refused, not transposed twice
+    with pytest.raises(ValueError, match="grid map"):
+        grid_map(np.zeros((1, 6), np.float32), (3, 2))  # the retired flat MC layout
 
 
 def test_value_range_clamps_without_resolve():
@@ -427,17 +429,22 @@ def _live_studio():
     return studio, comp
 
 
-def _run_live(solver):
+def _run_live(solver, *, integrator="basic", grid_shape=None, tx_position=None):
     from wt_channel.adapter.solve import SolveRunner
 
     studio, comp = _live_studio()
+    if tx_position is not None:
+        tx = next(o for o in studio.objects.values() if o.name == "tx")
+        tx.get_component("Transform").position = list(tx_position)
     comp.solver = solver
+    comp.mc_integrator = integrator
     comp.mc_samples_per_tx = 1 << 16
     # The deterministic solver adds paths coherently, so the ground reflection's
     # interference moves its strongest cell away from under the Tx; LoS alone does not.
     comp.det_max_bounces = 0
     comp.det_max_diffraction_order = 0
-    return SolveRunner.run(studio, comp, transmitter="tx", receiver="rmap")
+    kwargs = {} if grid_shape is None else {"grid_shape": grid_shape}
+    return SolveRunner.run(studio, comp, transmitter="tx", receiver="rmap", **kwargs)
 
 
 def _assert_map_oriented(maps):
@@ -462,13 +469,100 @@ def test_live_deterministic_radiomap_is_oriented(det_ready):
     _assert_map_oriented(_run_live("deterministic"))
 
 
-def test_live_radiomap_solver_host_solves_and_queries(mc_ready, solver_child):
+def test_live_bdpt_radiomap_is_oriented(mc_ready):
+    # experimental.bdpt shares the [T, rows, cols] grid order of the stable solvers.
+    _assert_map_oriented(_run_live("montecarlo", integrator="bdpt"))
+
+
+@pytest.mark.parametrize("solver", ["deterministic", "montecarlo"])
+def test_live_rectangular_preview_grid_keeps_plane_order(det_ready, mc_ready, solver):
+    # A live preview solves the region on (n_u, n_v) = (16, 8) cells; the map must come
+    # back as (T, n_v, n_u), the plane's data[iv, iu], not the solver's (T, n_u, n_v).
+    maps = _run_live(solver, grid_shape=(16, 8))
+
+    gain = maps.metric("path_gain")
+    assert gain.shape == (1, 8, 16)
+    g = gain[0]
+    # Tx above (x=+7, z=-7): high u (columns 8..15), low v (rows 0..3) holds the most power.
+    quadrants = {"tx": g[:4, 8:].sum(), "u_low_v_low": g[:4, :8].sum(),
+                 "u_high_v_high": g[4:, 8:].sum(), "far": g[4:, :8].sum()}
+    assert max(quadrants, key=quadrants.get) == "tx", quadrants
+
+
+@pytest.mark.parametrize("solver", ["deterministic", "montecarlo"])
+def test_live_tx_on_a_grid_sample_moves_the_grid_instead_of_failing(det_ready, mc_ready, solver):
+    # witwin-channel 0.6 refuses a grid sample within wavelength/(4 pi) (6.8 mm at
+    # 3.5 GHz) of a transmitter. A Tx dropped on the map plane exactly at a cell centre
+    # (x = 6.5, z = -6.5 of the 16 x 16 cells at y = 1.5) still solves: the grid steps
+    # a quarter cell aside and the solve says so.
+    maps = _run_live(solver, tx_position=[6.5, 1.5, -6.5])
+
+    gain = maps.metric("path_gain")
+    assert gain.shape == (1, 16, 16)
+    assert np.isfinite(gain).all() and (gain > 0).any()
+    assert "quarter cell" in maps.note and "'tx'" in maps.note
+    # The strongest cell is the one the Tx sits in (row iv = 1, column iu = 14).
+    assert np.unravel_index(int(np.argmax(gain[0])), gain[0].shape) == (1, 14)
+
+
+def test_tx_clear_of_the_grid_leaves_the_world_alone():
+    from witwin.core import AntennaState, ReceiverGrid, Scene
+    from wt_channel.adapter.solve import clear_grids_of_transmitters
+
+    world = Scene(structures=(), endpoints=(
+        AntennaState(1, "tx", [6.5, 4.0, -6.5], power_w=1.0),
+        ReceiverGrid(2, [-7.5, 1.5, -7.5], (1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (16, 16), (1.0, 1.0)),
+    ))
+
+    same, note = clear_grids_of_transmitters(world, 3.5e9)
+
+    assert same is world and note is None
+
+
+def test_tx_on_a_grid_sample_shifts_the_grid_a_quarter_cell():
+    from witwin.core import AntennaState, ReceiverGrid, Scene
+    from wt_channel.adapter.solve import clear_grids_of_transmitters
+
+    world = Scene(structures=(), endpoints=(
+        AntennaState(1, "tx", [6.5, 1.5, -6.5], power_w=1.0, metadata={"name": "tx"}),
+        ReceiverGrid(2, [-7.5, 1.5, -7.5], (1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (16, 16), (1.0, 0.5),
+                     metadata={"name": "rmap"}),
+    ))
+
+    moved, note = clear_grids_of_transmitters(world, 3.5e9)
+
+    grid = moved.endpoints[1]
+    np.testing.assert_allclose(grid.position.tolist(), [-7.25, 1.5, -7.375])
+    assert grid.shape == (16, 16) and int(grid.antenna_id) == 2
+    assert grid.metadata["name"] == "rmap"
+    assert note == "RadioMap 'rmap' moved a quarter cell off transmitter 'tx'"
+
+
+def test_tx_on_a_grid_too_fine_to_step_aside_is_reported():
+    from witwin.core import AntennaState, ReceiverGrid, Scene
+    from wt_channel.adapter.solve import clear_grids_of_transmitters
+
+    # 1 cm cells: a quarter cell (3.5 mm diagonal) is inside the 6.8 mm tolerance.
+    world = Scene(structures=(), endpoints=(
+        AntennaState(1, "tx", [0.0, 1.5, 0.0], power_w=1.0, metadata={"name": "tx"}),
+        ReceiverGrid(2, [-0.5, 1.5, -0.5], (1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (101, 101),
+                     (0.01, 0.01), metadata={"name": "rmap"}),
+    ))
+
+    with pytest.raises(ValueError, match="RadioMap 'rmap'.*transmitter 'tx'"):
+        clear_grids_of_transmitters(world, 3.5e9)
+
+
+@pytest.mark.parametrize("solver", ["deterministic", "montecarlo"])
+def test_live_radiomap_solver_host_solves_and_queries(det_ready, mc_ready, solver_child, solver):
     """Exercise the real RFC-012 child process path for radiomap solve + query."""
     from witwin_server.api import make_scene_ref
 
     process = solver_child("witwin.channel.radiomap")
     studio, comp = _live_studio()
-    comp.solver = "montecarlo"
+    comp.solver = solver
+    comp.det_max_bounces = 1
+    comp.det_max_diffraction_order = 1
     comp.mc_samples_per_tx = 2048
     comp.mc_max_bounces = 1
     comp.mc_max_diffraction_order = 0

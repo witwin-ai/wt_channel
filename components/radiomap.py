@@ -144,7 +144,9 @@ class RadioMapComponent(FieldComponent):
     # --- solver selection + transmitter ---
     solver = string_field("montecarlo", options=["deterministic", "montecarlo"],
                           enum_toggle=True, group=_SCENE, title="Solve",
-                          description="Monte Carlo is the robust default; deterministic needs its OptiX pipeline.")
+                          description="deterministic: coherent path sum (radiomap.Coherent); "
+                                      "montecarlo: ray sampling (radiomap.Stochastic, or "
+                                      "the experimental BDPT integrator).")
     transmitter = component_field("ChannelTx", group=_SCENE,
                                   description="Transmitter object (empty = first Tx in the scene).")
     live_update = bool_field(True, group=_SCENE, title="Live",
@@ -203,7 +205,10 @@ class RadioMapComponent(FieldComponent):
                                          description="0-3 (basic integrator clamps to 0/1).")
     mc_synthetic_array = bool_field(True, show_if=_MC)
     mc_integrator = string_field("basic", options=["basic", "bdpt"], enum_toggle=True,
-                                 group=_MC_INTEGRATOR, show_if=_MC)
+                                 group=_MC_INTEGRATOR, show_if=_MC,
+                                 description="basic: radiomap.Stochastic. bdpt: "
+                                             "experimental.bdpt; its options and results may "
+                                             "change in any witwin-channel release.")
     mc_samples_per_tx = int_field(65536, min=1, group=_MC_INTEGRATOR, show_if=_MC,
                                   description="Rays per transmitter.")
     mc_seed = int_field(0, min=0, group=_MC_INTEGRATOR, show_if=_MC)

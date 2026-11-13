@@ -1,5 +1,17 @@
 # wt-channel — follow-ups (Phase C5) & verification notes
 
+## witwin-channel 0.6 port (2026-11-13, wt_channel 0.2.0)
+
+wt_channel 0.2.0 requires witwin-channel 0.6 and witwin 0.4.6. The RadioMap solver
+values stay `deterministic` / `montecarlo` (saved scenes keep them) and now run
+`radiomap.Coherent` (`combine="field"`, the 0.5 default) / `radiomap.Stochastic`;
+`mc_integrator = "bdpt"` runs `experimental.bdpt`, which upstream may change in any
+release. Every grid is `[T, rows, cols]`; `adapter/solve.grid_map` transposes it to
+the plane's `[T, v, u]`. A grid sample within `wavelength / (4 pi)` of a transmitter
+(0.6 refuses it) moves the grid a quarter cell aside; the solve progress names the
+shift. Coherent results move where 0.6 fixed the physics (diffraction, coupled
+chains, layered faces; upstream CHANGELOG 0.6.0, "Fixed").
+
 ## witwin-channel 0.5 port (2026-10-25)
 
 The radiomap path (adapter, ITU presets, Tx / Rx / RadioMap endpoints, deterministic +

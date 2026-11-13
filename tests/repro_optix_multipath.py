@@ -1,42 +1,41 @@
-"""Standalone OptiX 'multipath' repro — pure witwin.channel, no studio / wt_channel.
+"""Standalone solver repro: pure witwin.channel 0.6 + witwin.core, no Studio.
 
 Not a pytest test (no ``test_`` prefix, so it is never collected). Run it directly in
-whichever env you want to check, to confirm whether the deterministic + path solvers'
-shared 'multipath' OptiX pipeline compiles there:
+whichever env you want to check, to see whether each solver the Plugin uses runs there:
 
-    # conda witwin2 (the wt_channel test env)
-    C:/Users/Asixa/miniconda3/envs/witwin2/python.exe repro_optix_multipath.py
+    <project-or-server-python> tests/repro_optix_multipath.py
 
-    # or the env your running editor/server uses
-    <server-env-python> repro_optix_multipath.py
-
-Monte Carlo uses a different pipeline and is expected to work everywhere; deterministic
-and path share the 'multipath' pipeline that fails to compile in conda witwin2. If all
-three print OK in your env, the gated live tests (test_c3 deterministic / test_c4 path)
-will run and pass there automatically — no code change needed.
+``python -m witwin.channel doctor`` reports the GPU, driver and OptiX probe; this script
+then runs one small solve per solver three times and prints every failure verbatim. If
+all three print OK, the gated live tests (``det_ready`` / ``mc_ready`` / ``path_ready``
+in ``conftest.py``) run in that env.
 """
-import witwin.channel as ch
-from witwin.core import Box, Structure
-from wt_channel.adapter.itu import itu_material
+import torch
+from witwin.channel import path, radiomap
+from witwin.core import AntennaState, Box, Mesh, PhysicalMaterial, ReceiverGrid, Scene, Structure
+
+FREQUENCY_HZ = 3.5e9
 
 
 def radiomap_scene():
-    return ch.Scene(
-        structures=[Structure(Box(size=(8.0, 8.0, 0.1), position=(0.0, 0.0, 0.0)),
-                              itu_material("concrete", 3.5e9), name="g")],
-        transmitters=[ch.Transmitter(name="tx", position=(0.0, 0.0, 3.0))],
-        receivers=[ch.ReceiverGrid(name="rmap", axis="z", position=1.5,
-                                   bounds=((-4.0, 4.0), (-4.0, 4.0)), grid_shape=(8, 8))],
-        frequency=3.5e9, device="cuda")
+    ground = Structure(
+        Mesh(torch.tensor([[-4.0, -4.0, 0.0], [4.0, -4.0, 0.0], [4.0, 4.0, 0.0], [-4.0, 4.0, 0.0]]),
+             torch.tensor([[0, 1, 2], [0, 2, 3]]), recenter=False, fill_mode="surface"),
+        PhysicalMaterial(eps_r=5.24, sigma_e=0.12, name="concrete"), name="ground")
+    return Scene(structures=[ground], endpoints=[
+        AntennaState(1, "tx", torch.tensor([0.0, 0.0, 3.0]), power_w=1.0),
+        ReceiverGrid(2, torch.tensor([-3.5, -3.5, 1.5]), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0),
+                     (8, 8), (1.0, 1.0)),
+    ])
 
 
 def path_scene():
-    return ch.Scene(
-        structures=[Structure(Box(size=(0.3, 4.0, 4.0), position=(2.0, 0.0, 2.0)),
-                              itu_material("concrete", 3.5e9), name="wall")],
-        transmitters=[ch.Transmitter(name="tx", position=(0.0, 0.0, 2.0))],
-        receivers=[ch.Receiver(name="rx", position=(4.0, 0.0, 2.0))],
-        frequency=3.5e9, device="cuda")
+    wall = Structure(Box(size=(0.3, 4.0, 4.0), position=(2.0, 0.0, 2.0)),
+                     PhysicalMaterial(eps_r=5.24, sigma_e=0.12, name="concrete"), name="wall")
+    return Scene(structures=[wall], endpoints=[
+        AntennaState(1, "tx", torch.tensor([0.0, 0.0, 2.0]), power_w=1.0),
+        AntennaState(2, "rx", torch.tensor([4.0, 0.0, 2.0])),
+    ])
 
 
 def probe(label, fn):
@@ -49,9 +48,9 @@ def probe(label, fn):
 
 
 if __name__ == "__main__":
-    probe("montecarlo  ", lambda: ch.montecarlo.solve(scene=radiomap_scene(),
-                                                       transmitter="tx", receiver="rmap"))
-    probe("deterministic", lambda: ch.deterministic.solve(scene=radiomap_scene(),
-                                                          transmitter="tx", receiver="rmap"))
-    probe("path        ", lambda: ch.path.solve(scene=path_scene(),
-                                                 transmitter="tx", receiver="rx"))
+    probe("stochastic", lambda: radiomap.solve(radiomap_scene(), radiomap.Stochastic(samples=1024),
+                                               reference_frequency_hz=FREQUENCY_HZ))
+    probe("coherent  ", lambda: radiomap.solve(radiomap_scene(), radiomap.Coherent(),
+                                               reference_frequency_hz=FREQUENCY_HZ))
+    probe("path      ", lambda: path.solve(path_scene(), path.Config(),
+                                           reference_frequency_hz=FREQUENCY_HZ))

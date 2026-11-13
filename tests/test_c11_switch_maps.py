@@ -98,8 +98,10 @@ def test_each_solve_keeps_only_the_newest_compiled_scene(host, monkeypatch):
 
     registry = compiler._CompileRegistry()
     monkeypatch.setattr(compiler, "_REGISTRY", registry)
+    # Filled directly: put() inspects real compiled scenes, and this test is about
+    # what the solver host trims, not about the registry's own eviction.
     for i in range(3):
-        registry.put(("older", i), object())
+        registry._compiled[("older", i)] = object()
 
     host.module.solve(_Ctx(), _studio_with_tx(), _config("mit"))
 

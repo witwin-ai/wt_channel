@@ -10,10 +10,11 @@ Transform).
 
 The grid samples are the RadioMap Field-region cell centers. Its axes are the plane's
 tangential world axes (u -> ``x_axis``, v -> ``y_axis``) and ``shape`` is
-``(n_u, n_v)``; the solvers publish a grid map as ``(T, n_v, n_u)``, which is exactly the
-``data[iv, iu]`` layout the RadioMap plane visualizer consumes.
+``(n_u, n_v)``; witwin-channel 0.6 publishes a grid map as ``[T, rows, cols]`` =
+``(T, n_u, n_v)``, which ``adapter.solve.grid_map`` transposes into the ``data[iv, iu]``
+layout the RadioMap plane visualizer consumes.
 
-Only the plain single isotropic element is ported to witwin-channel 0.5; arrays and
+Only the plain single isotropic element is ported to witwin-channel 0.6; arrays and
 non-isotropic patterns fail loudly instead of silently solving a different antenna.
 """
 import math
@@ -236,14 +237,14 @@ def _antenna_id(antenna_id: Optional[int]) -> Any:
 
 
 def _require_plain_antenna(name: str, comp: Any) -> None:
-    # witwin-channel 0.5 radiomap solvers advertise no antenna arrays; only the single
+    # witwin-channel 0.6 radiomap solvers advertise no antenna arrays; only the single
     # isotropic element is ported, so anything else must not silently solve as one.
     if str(comp.array_kind) != "single":
         raise ValueError(f"{name}: antenna array '{comp.array_kind}' is not supported "
-                         "on witwin-channel 0.5 yet (use a single element).")
+                         "on witwin-channel 0.6 yet (use a single element).")
     if str(comp.pattern) != "iso":
         raise ValueError(f"{name}: antenna pattern '{comp.pattern}' is not supported "
-                         "on witwin-channel 0.5 yet (use 'iso').")
+                         "on witwin-channel 0.6 yet (use 'iso').")
 
 
 def _radiomap_grid_shape(

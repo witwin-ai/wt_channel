@@ -101,25 +101,25 @@ def cuda(device):
 
 @pytest.fixture(scope="session")
 def det_ready(cuda):
-    """Gate the deterministic live solve on its OptiX pipeline compiling here."""
-    from witwin.channel import deterministic
+    """Gate the deterministic (``radiomap.Coherent``) live solve on its OptiX pipeline."""
+    from witwin.channel import radiomap
     try:
-        deterministic.solve(_tiny_radiomap_world(), deterministic.Config(max_depth=1),
-                            reference_frequency_hz=3.5e9)
+        radiomap.solve(_tiny_radiomap_world(), radiomap.Coherent(max_depth=1),
+                       reference_frequency_hz=3.5e9)
     except Exception as exc:  # noqa: BLE001 - test gate: needs-user-verification if it can't run
-        pytest.skip(f"deterministic solver unavailable in this environment: {exc}")
+        pytest.skip(f"radiomap.Coherent unavailable in this environment: {exc}")
     return True
 
 
 @pytest.fixture(scope="session")
 def mc_ready(cuda):
-    """Gate the Monte Carlo live solve on its solver running here."""
-    from witwin.channel.montecarlo import basic
+    """Gate the Monte Carlo (``radiomap.Stochastic``) live solve on its solver running here."""
+    from witwin.channel import radiomap
     try:
-        basic.solve(_tiny_radiomap_world(), basic.Config(samples=1024, max_depth=1),
-                    reference_frequency_hz=3.5e9)
+        radiomap.solve(_tiny_radiomap_world(), radiomap.Stochastic(samples=1024, max_depth=1),
+                       reference_frequency_hz=3.5e9)
     except Exception as exc:  # noqa: BLE001 - test gate: needs-user-verification if it can't run
-        pytest.skip(f"montecarlo solver unavailable in this environment: {exc}")
+        pytest.skip(f"radiomap.Stochastic unavailable in this environment: {exc}")
     return True
 
 

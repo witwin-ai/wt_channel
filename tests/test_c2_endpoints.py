@@ -3,9 +3,9 @@
 A ``ChannelTx`` object becomes a ``witwin.core.AntennaState`` (role ``tx``), a
 ``ChannelRx`` object a point ``AntennaState`` (role ``rx``), and a ``RadioMap`` object a
 ``witwin.core.ReceiverGrid`` whose samples are the Field-region cell centers. The grid
-axes follow the RadioMap plane's tangential world axes (u -> ``x_axis``, v -> ``y_axis``)
-so a solved ``(T, n_v, n_u)`` map keeps the ``data[iv, iu]`` layout the plane visualizer
-expects. Only the plain single isotropic element is ported; other antennas fail loudly.
+axes follow the RadioMap plane's tangential world axes (u -> ``x_axis``, v -> ``y_axis``),
+so the solver's ``[T, rows, cols]`` map is ``(T, n_u, n_v)``; ``grid_map`` transposes it
+into the ``data[iv, iu]`` layout the plane visualizer expects. Only the plain single isotropic element is ported; other antennas fail loudly.
 """
 import numpy as np
 import pytest
