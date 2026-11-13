@@ -95,7 +95,11 @@ def _make_demo(ctx):
     ctx.scene.add_object(_tx_object("Tx", (-5.0, 3.0, 0.0)))   # Y is up/height
     ctx.scene.add_object(_rx_object("Rx", (8.0, 1.5, 0.0)))
     ctx.scene.add_object(_pathsolver_object("Path Solver"))
-    return _radiomap_object("RadioMap")
+    # At the Rx height, not y=0: y=0 is inside the 0.2 m ground slab, where every
+    # sample is occluded and the map comes out empty. The drop keeps this offset.
+    radiomap = _radiomap_object("RadioMap")
+    radiomap.get_component("Transform").position = [0.0, 1.5, 0.0]
+    return radiomap
 
 
 def _make_tx(ctx):

@@ -4,8 +4,8 @@
   "templateVersion": "1.3.0",
   "projectFormatVersion": "1.0",
   "minProtocol": 1,
-  "totalBytes": 16387,
-  "treeSha256": "e7b83c522dfb8215cee0f25fa1553a3ec1e9f56264e9d0492618af77deb54921",
+  "totalBytes": 16497,
+  "treeSha256": "4381cf45ad67b910223cc4e48478d8466ae7dabb99c911f702e4e53c1797c622",
   "recommendedPlugins": [
     "witwin.channel"
   ],
@@ -27,8 +27,8 @@
     },
     {
       "path": "scenes/main.wtscene",
-      "bytes": 10043,
-      "sha256": "9e51e942348561f984f32dfa1e0b991c72b943e70535c2e78effbeed4ca1c689"
+      "bytes": 10153,
+      "sha256": "f85f63cbb395de8d37a1e34c5c4f13a0d41e19646ca911f091fd7d077d6ada3a"
     },
     {
       "path": "scripts/prepare_channel.py",

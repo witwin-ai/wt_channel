@@ -4,8 +4,8 @@
   "templateVersion": "1.1.0",
   "projectFormatVersion": "1.0",
   "minProtocol": 1,
-  "totalBytes": 43671,
-  "treeSha256": "362853bc8d6782d36b7707ed5840a80dd971abab183f48287910d6f5883d801f",
+  "totalBytes": 43781,
+  "treeSha256": "bf08d4ad9b43135b632ba1da47d7da560d4a421e5564c348ddf06ade6a0bcbf6",
   "recommendedPlugins": [
     "witwin.channel"
   ],
@@ -32,8 +32,8 @@
     },
     {
       "path": "scenes/main.wtscene",
-      "bytes": 10341,
-      "sha256": "1af997fd0d8bb75d678accd4a74a0f9474358e49ea734c5aae2e1b930368905b"
+      "bytes": 10451,
+      "sha256": "e913d027ec9b309f8fdd168f09645af94da3cec3313b572b82556f023859e16b"
     },
     {
       "path": "scripts/evaluate.py",
