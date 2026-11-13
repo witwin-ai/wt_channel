@@ -5,7 +5,7 @@ the Study's sampled ``rx_x`` and ``rx_z``: the total path gain in dB (the
 label), the RMS delay spread and the number of paths.
 
 The Channel Plugin's Path Solver runs inside Studio. This script calls the
-same library (``witwin.channel`` 0.5 path solver, CUDA only) directly, so a
+same library (``witwin.channel`` 0.6 path solver, CUDA only) directly, so a
 dataset Run needs no editor. It follows the Plugin's Solve Paths: the
 buildings and the ground as boxes with their ITU material at the Path
 Solver's frequency, the Tx and Rx as single isotropic antennas, and the

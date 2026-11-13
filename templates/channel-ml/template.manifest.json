@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "templateId": "channel-ml",
-  "templateVersion": "1.0.0",
+  "templateVersion": "1.1.0",
   "projectFormatVersion": "1.0",
   "minProtocol": 1,
-  "totalBytes": 43669,
-  "treeSha256": "0cb886974b218db17c210f1024732832553f912b2bdfc382880ce02f8dbbeb42",
+  "totalBytes": 43671,
+  "treeSha256": "362853bc8d6782d36b7707ed5840a80dd971abab183f48287910d6f5883d801f",
   "recommendedPlugins": [
     "witwin.channel"
   ],
@@ -27,8 +27,8 @@
     },
     {
       "path": "pyproject.toml",
-      "bytes": 1607,
-      "sha256": "de089764d7d796b093c7c7b1767bd291802fe4974248f1195b3e613833568ebf"
+      "bytes": 1609,
+      "sha256": "f5651779e40e72762b0094932e4a811f86603754b2970f267f17c8cd41403cd8"
     },
     {
       "path": "scenes/main.wtscene",
@@ -48,7 +48,7 @@
     {
       "path": "scripts/synthesize.py",
       "bytes": 8201,
-      "sha256": "91fcb2973d1592590a2a8f63415d2a75f6d671de4a9a92979ab1ececa2b58f24"
+      "sha256": "955d2350367749317163b3545ce3e961a32361f9a9a7f664d50611efbe3420d1"
     },
     {
       "path": "scripts/train.py",
@@ -88,7 +88,7 @@
     {
       "path": "witwin.toml",
       "bytes": 270,
-      "sha256": "e1fdfa0442861b4979ded5bd88f051a7727337a9a8bfe69fd775960cd9f56352"
+      "sha256": "517a0503ba83244f10be99208aa6115f9dae5bc710e32bfcb74e80a44d8d1c0e"
     }
   ]
 }
